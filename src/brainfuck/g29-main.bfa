@@ -1,0 +1,341 @@
+; ===========================================================================
+; g29-main.bfa - the G29 standalone application, in Brainfuck assembly.
+; Assemble with .\bf.ps1 into g29-main.bf (the program the bridge runs).
+; ===========================================================================
+
+include "lib/core.bfa"
+include "layout.bfa"
+include "lib/frame.bfa"
+include "lib/print.bfa"
+include "lib/time.bfa"
+include "protocol.bfa"
+include "cli.bfa"
+include "monitor.bfa"
+include "registration.bfa"
+include "doctor.bfa"
+include "lib/wide.bfa"
+include "engine.bfa"
+include "engine_test.bfa"
+include "steering.bfa"
+include "steering_test.bfa"
+include "dieffect.bfa"
+include "directinput.bfa"
+include "watchdog.bfa"
+include "install.bfa"
+
+section "G29 STANDALONE  THE PERSISTENT SCRIPTURE"
+section "Generated from src/brainfuck/g29-main.bfa by tools/BfAsm  do not edit by hand"
+section "Only the eight Brainfuck commands are executable  everything else is a comment"
+section "ABI  src/brainfuck/ABI.md   tape  src/brainfuck/MEMORY_MAP.md"
+
+; ---------------------------------------------------------------------------
+; Handlers
+; ---------------------------------------------------------------------------
+
+; EV_BOOT: role u8, pointer size u8, process arch u8, os flags u8, argc u16, argv
+macro on_boot() {
+    frame_in(role)
+    set(booted, 1)
+    local known {
+        if_eq(role, 4) {
+            set(known, 1)
+            section "role TEST  answer BOOT"
+            frame_skip()
+            eng_init()
+            emit_header(0x8F, 4)
+            out_str("BOOT")
+        }
+        if_eq(role, 3) {
+            set(known, 1)
+            section "role DIRECTINPUT  the effect driver answers the COM shell"
+            frame_skip()
+            eng_init()
+        }
+        if_eq(role, 1) {
+            set(known, 1)
+            section "role CLI  parse the arguments  then run the command state machine"
+            cli_boot()
+            cli_main()
+        }
+        if_z(known) {
+            section "role SERVICE is entered through role CLI  g29ctl service"
+            frame_skip()
+            emit_log(2, "This Brainfuck program does not implement that role yet.")
+            emit_exit(69)
+            clear(running)
+        }
+        clear(known)
+    }
+}
+
+; CMD_TEST_RESULT header for the current event with a payload length in cell n.
+macro test_header(n) {
+    out_const(0xA5)
+    out_const(1)
+    out_const(0x8F)
+    out_const(0)
+    put(fr_seq_lo)
+    put(fr_seq_hi)
+    out_u16(n)
+}
+
+; status only
+macro test_status(code) {
+    emit_reply_header(0x8F, 1)
+    out_const(code)
+}
+
+; status 0 + the reports in rpt
+macro test_reports() {
+    local n {
+        copy_mul(pr_count, n, 7)
+        add(n, 1)
+        test_header(n)
+        clear(n)
+    }
+    out_const(0)
+    put_reports()
+}
+
+; 'E' + data: count u32 + data, streamed (count of echo events so far).
+macro test_echo() {
+    @test_counter +
+    local total {
+        copy(fr_rem, total)
+        add(total, 4)
+        test_header(total)
+        clear(total)
+    }
+    out_u32(test_counter)
+    local b {
+        while_nz(fr_rem) {
+            get(b)
+            put(b)
+            clear(b)
+            @fr_rem -
+        }
+    }
+}
+
+; EV_TEST (role TEST): the first payload byte selects a test entry point.
+;   E data               echo with a persistent counter
+;   I pid u16, rev u16   identification flags        -> status, flags
+;   N / S                native switch / stop        -> status, reports
+;   R degrees u16        range (40..900)             -> status, report | status 3
+;   A percent u8         autocenter (0..100)         -> status, reports | status 3
+;   L mask u8            LEDs (0..31)                -> status, report | status 3
+;   F negative u8, magnitude u8 (0/1, 0..100)        -> status, report | status 3
+;   G engine operation (engine_test.bfa)   W steering operation (steering_test.bfa)
+;   H active u8, beat, now (sign u8 + u64 each)  -> status, abandoned (watchdog.bfa)
+macro on_test() {
+    frame_in(test_sel)
+    local op, bad {
+        ; decode the selector and its arguments; bad = an argument is out of range
+        if_eq(test_sel, 'E') { set(op, 1) }
+        if_eq(test_sel, 'I') {
+            set(op, 2)
+            frame_in(pr_arg2)
+            frame_in(pr_arg1)
+            frame_in(pr_arg4)
+            frame_in(pr_arg3)
+        }
+        if_eq(test_sel, 'N') { set(op, 3) }
+        if_eq(test_sel, 'G') { set(op, 20) }
+        if_eq(test_sel, 'W') { set(op, 21) }
+        if_eq(test_sel, 'H') { set(op, 22) }
+        if_eq(test_sel, 'S') { set(op, 4) }
+        if_eq(test_sel, 'R') {
+            set(op, 5)
+            frame_in_u16(pr_arg1)
+            lt_const(pr_arg1, 40, bad)
+            gt_const(pr_arg1, 900, bad)
+        }
+        if_eq(test_sel, 'A') {
+            set(op, 6)
+            frame_in(pr_arg1)
+            gt_const(pr_arg1, 100, bad)
+        }
+        if_eq(test_sel, 'L') {
+            set(op, 7)
+            frame_in(pr_arg1)
+            gt_const(pr_arg1, 31, bad)
+        }
+        if_eq(test_sel, 'F') {
+            set(op, 8)
+            frame_in(pr_arg1)
+            frame_in(pr_arg2)
+            gt_const(pr_arg1, 1, bad)
+            gt_const(pr_arg2, 100, bad)
+        }
+
+        if_z(op) { test_status(17) }
+        if_eq(op, 1) { test_echo() }
+        if_eq(op, 20) { test_engine() }
+        if_eq(op, 21) { test_steering() }
+        if_eq(op, 22) {
+            ; watchdog rule: active u8, beat and now (sign u8 + u64 each)
+            local active, bn, b[3], nn, n[3], gone {
+                frame_in(active)
+                frame_in(bn)
+                w_read_u64(b)
+                frame_in(nn)
+                w_read_u64(n)
+                wd_abandoned(active, bn, b, nn, n, gone)
+                emit_reply_header(0x8F, 2)
+                out_const(0)
+                put(gone)
+                clear(active)
+                clear(bn)
+                clear(nn)
+                clear(gone)
+                w_clear(b)
+                w_clear(n)
+            }
+        }
+
+        if_gt_const(op, 1) { if_lt_const(op, 20) {
+            if_nz_else(fr_short) { test_status(1) } {
+                if_nz_else(bad) { test_status(3) } {
+                    if_eq(op, 2) {
+                        proto_identify()
+                        emit_reply_header(0x8F, 2)
+                        out_const(0)
+                        put(pr_flags)
+                    }
+                    if_eq(op, 3) { proto_native() test_reports() }
+                    if_eq(op, 4) { proto_stop() test_reports() }
+                    if_eq(op, 5) { proto_range() test_reports() }
+                    if_eq(op, 6) { proto_autocenter() test_reports() }
+                    if_eq(op, 7) { proto_leds() test_reports() }
+                    if_eq(op, 8) { proto_force() test_reports() }
+                }
+            }
+        } }
+        clear(op)
+        clear(bad)
+    }
+    clear(test_sel)
+    clear(pr_arg1)
+    clear(pr_arg2)
+    clear(pr_arg3)
+    clear(pr_arg4)
+    clear(pr_flags)
+    clear(pr_count)
+}
+
+;---------------------------------------------------------------------------
+; Shared services. The effect engine and the steering motion are large, so
+; each is expanded exactly once, here. A handler stores its requests (st_req,
+; e_cmd and their inputs) and a continuation id in svc; after the handler
+; returns, the services run the requests and then the continuation, which may
+; request more.
+; ---------------------------------------------------------------------------
+
+const K_TEST_G = 1
+const K_TEST_W = 2
+const K_TEST_D = 3
+
+macro run_services() {
+    while_nz(svc) {
+        if_nz(st_req) {
+            if_eq(st_req, 1) { st_axis() }
+            if_eq(st_req, 2) { st_sample() }
+            if_eq(st_req, 3) { st_current() }
+            clear(st_req)
+        }
+        if_nz(ap_req) {
+            di_apply()
+            clear(ap_req)
+        }
+        if_nz(e_cmd) {
+            engine_exec()
+            clear(e_cmd)
+        }
+        local k {
+            copy(svc, k)
+            clear(svc)
+            if_eq(k, K_TEST_G) { test_engine_done() }
+            if_eq(k, K_TEST_W) { test_steering_done() }
+            di_continue(k)
+            if_eq(k, K_TEST_D) {
+                if_nz_else(di_inv) {
+                    emit_reply_header(0x8F, 1)
+                    out_const(3)
+                } {
+                    emit_reply_header(0x8F, 88)
+                    out_const(0)
+                    put_params()
+                }
+                clear(di_inv)
+                for i = 0 to 3 { clear(di_chg + i) }
+                for f = 0 to 51 { clear(gp + f) }
+            }
+            clear(k)
+        }
+    }
+}
+
+macro on_shutdown() {
+    frame_skip()
+    ; the effect driver stops the wheel before the process goes
+    if_eq(role, 3) { di_close() }
+    emit_exit(0)
+    clear(running)
+}
+
+; ---------------------------------------------------------------------------
+; Event loop
+; ---------------------------------------------------------------------------
+
+section "THE EVENT LOOP"
+set(running, 1)
+while_nz(running) {
+    frame_read_header()
+    if_nz_else(fr_bad) {
+        section "malformed frame  the stream cannot be trusted any more"
+        emit_abi_error(1)
+        emit_exit(70)
+        clear(running)
+    } {
+        clear(handled)
+        if_z(booted) {
+            if_eq(fr_type, 0x01) {
+                set(handled, 1)
+                on_boot()
+            }
+            if_z(handled) {
+                set(handled, 1)
+                frame_skip()
+                emit_abi_error(18)
+            }
+        }
+        if_z(handled) {
+            if_eq(fr_type, 0x03) {
+                set(handled, 1)
+                on_shutdown()
+            }
+        }
+        if_z(handled) {
+            if_eq(role, 4) {
+                if_eq(fr_type, 0x05) {
+                    set(handled, 1)
+                    on_test()
+                }
+            }
+        }
+        if_z(handled) {
+            if_eq(role, 3) {
+                set(handled, 1)
+                on_directinput()
+            }
+        }
+        if_z(handled) {
+            frame_skip()
+            emit_abi_error(17)
+        }
+        clear(handled)
+        run_services()
+        frame_skip()
+    }
+}
+section "THE SCRIPTURE ENDS"

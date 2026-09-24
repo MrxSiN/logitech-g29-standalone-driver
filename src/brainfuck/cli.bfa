@@ -1,0 +1,1508 @@
+; ===========================================================================
+; cli.bfa - role CLI: g29ctl command line, device selection and controller
+; ===========================================================================
+;
+; Reproduces the legacy g29ctl behavior (tests/reference/cli.txt and
+; controller.txt): argument rules, messages, exit codes, the one-wheel rule,
+; PS4-mode refusal, native re-enumeration (250 ms polls, 8 s limit) and the
+; bounded diagnostic force with its stop in every path.
+;
+; Structure: a state machine. Each pass runs the handler of cli_cur (a copy of
+; cli_state, so a handler that changes the state is not run twice). Action
+; states run immediately; await states set cli_wait and handle the next event.
+; Small subroutines (find devices, require one wheel, send reports, wait for the
+; native wheel) return to the state stored in their *_ret cell.
+
+; ---- keywords (ids are ap_m index + 1) ----
+const KW_STATUS = 1
+const KW_DOCTOR = 2
+const KW_INIT = 3
+const KW_RANGE = 4
+const KW_AUTOCENTER = 5
+const KW_LEDS = 6
+const KW_FORCE = 7
+const KW_STOP = 8
+const KW_WATCH = 9
+const KW_SERVICE = 10
+const KW_FFB_REGISTER = 11
+const KW_FFB_UNREGISTER = 12
+const KW_HELP_LONG = 13
+const KW_HELP_SHORT = 14
+const KW_HELP_WORD = 15
+const KW_OPT_RANGE = 16
+const KW_OPT_AUTOCENTER = 17
+const KW_OPT_MS = 18
+const KW_OPT_IU = 19
+const KW_INSTALL_PLAN = 20
+const KW_COUNT = 20
+
+; ---- messages ----
+const M_NO_G29 = 1
+const M_PS4 = 2
+const M_MULTIPLE = 3
+const M_COMPAT = 4
+const M_TIMEOUT = 5
+const M_OPEN = 6
+const M_WRITE = 7
+const M_REPORT_LEN = 8
+const M_NUMERIC = 9
+const M_RANGE = 10
+const M_FORCE_LIMIT = 11
+const M_DURATION = 12
+const M_ACK = 13
+const M_UNKNOWN_OPTION = 14
+const M_UNKNOWN_COMMAND = 15
+
+; err[] fields
+const E_MSG = 0
+const E_NAME = 1
+const E_NEG = 2
+const E_MAG = 3
+const E_MIN = 4
+const E_NUM = 5
+
+; names (M_NUMERIC) and range kinds (M_RANGE)
+const N_DEGREES = 1
+const N_PERCENT = 2
+const N_MASK = 3
+const N_OPT_RANGE = 4
+const N_OPT_AUTOCENTER = 5
+const N_OPT_MS = 6
+
+; integer argument fields
+const I_FOUND = 0
+const I_VALID = 1
+const I_NEG = 2
+const I_MAG = 3
+const I_MIN = 4
+
+; ---- states ----
+const S_START = 1
+const S_FAIL = 2
+const S_EXIT = 3
+const S_IDLE = 4
+const F_START = 10
+const F_BEGIN = 11
+const F_DEVICES = 12
+const R_START = 20
+const R_CHECK = 21
+const RN_START = 22
+const W_START = 30
+const W_OPENED = 31
+const W_NEXT = 32
+const W_WRITTEN = 33
+const N_START = 40
+const N_T0 = 41
+const N_CHECK = 42
+const N_TICK = 43
+const ST_1 = 50
+const ST_2 = 51
+const RG_1 = 60
+const RG_2 = 61
+const RG_3 = 62
+const AC_1 = 65
+const AC_2 = 66
+const AC_3 = 67
+const LD_1 = 70
+const LD_2 = 71
+const LD_3 = 72
+const SP_1 = 75
+const SP_2 = 76
+const SP_3 = 77
+const IN_1 = 80
+const IN_2 = 81
+const IN_3 = 82
+const IN_4 = 83
+const IN_5 = 84
+const IN_6 = 85
+const IN_7 = 86
+const FO_1 = 90
+const FO_2 = 91
+const FO_3 = 92
+const FO_4 = 93
+const FO_5 = 94
+const FO_WAIT = 95
+const FO_FIN = 96
+const FO_STOP = 97
+const FO_DONE = 98
+
+const EV_TIMER = 0x02
+const EV_SHUTDOWN = 0x03
+const EV_HID_ENUM_BEGIN = 0x10
+const EV_HID_DEVICE = 0x11
+const EV_HID_ENUM_END = 0x12
+const EV_HID_OPEN_RESULT = 0x13
+const EV_HID_WRITE_RESULT = 0x14
+const EV_CANCEL = 0x44
+
+const EXIT_CTRL_C = 0xC000013A
+
+; ===========================================================================
+; Small helpers
+; ===========================================================================
+
+macro goto_state(k) { set(cli_state, k) }
+
+; Wait for the next event in state k.
+macro await_state(k) {
+    set(cli_state, k)
+    set(cli_wait, 1)
+}
+
+; The current event was handled.
+macro consumed() {
+    frame_skip()
+    clear(cli_have)
+}
+
+; dst[0..n-1] = src[0..n-1]
+macro cells_copy(src, dst, n) {
+    for k = 0 to n - 1 {
+        clear(dst + k)
+        copy(src + k, dst + k)
+    }
+}
+
+macro cells_clear(x, n) {
+    for k = 0 to n - 1 { clear(x + k) }
+}
+
+; Fails with message m: the error continuation (err_ret) takes over.
+macro fail(m) {
+    set(err + E_MSG, m)
+    clear(cli_state)
+    copy(err_ret, cli_state)
+}
+
+; Records a signed integer argument (fields at a) as the error value.
+macro err_value(a) {
+    cells_clear(err + E_NEG, 3)
+    copy(a + I_NEG, err + E_NEG)
+    copy(a + I_MAG, err + E_MAG)
+    copy(a + I_MIN, err + E_MIN)
+}
+
+; flag += (signed value at a, known valid, lies in lo..hi) for 0 <= lo <= hi.
+macro int_in_range(a, lo, hi, flag) {
+    local bad {
+        if_nz(a + I_MIN) { set(bad, 1) }
+        if_nz(a + I_NEG) { if_nz(a + I_MAG) { set(bad, 1) } }
+        lt_const(a + I_MAG, lo, bad)
+        gt_const(a + I_MAG, hi, bad)
+        if_z(bad) { @flag + }
+        clear(bad)
+    }
+}
+
+; flag += (|value| <= k), for the signed diagnostic force.
+macro int_abs_le(a, k, flag) {
+    local bad {
+        if_nz(a + I_MIN) { set(bad, 1) }
+        gt_const(a + I_MAG, k, bad)
+        if_z(bad) { @flag + }
+        clear(bad)
+    }
+}
+
+macro emit_exit_code() {
+    emit_header(0x80, 4)
+    put(cli_exit)
+    out_const(0)
+    out_const(0)
+    out_const(0)
+}
+
+; ===========================================================================
+; Argument parsing (EV_BOOT argv), one byte at a time
+; ===========================================================================
+
+; One keyword test for the current byte: keyword id, text, case sensitivity.
+macro kw_step(id, text, sensitive) {
+    if_nz(ap_m + id - 1) {
+        local ok {
+            for c, j in text {
+                if_nz(ap_oh + j) {
+                    if_eq(sensitive ? ap_b : ap_low, c) { set(ok, 1) }
+                }
+            }
+            if_z(ok) { clear(ap_m + id - 1) }
+            clear(ok)
+        }
+    }
+}
+
+macro kw_end(id, text) {
+    if_nz(ap_m + id - 1) {
+        if_eq(ap_pos, len(text)) { set(ap_kw, id) }
+    }
+}
+
+; The keyword table. Commands and options compare lower-cased bytes (legacy
+; ToLowerInvariant / OrdinalIgnoreCase); the help words are case-sensitive.
+; 'final' selects the end-of-argument check instead of the per-byte step.
+macro keywords(final) {
+    kw(final, KW_STATUS, "status", 0)
+    kw(final, KW_DOCTOR, "doctor", 0)
+    kw(final, KW_INIT, "init", 0)
+    kw(final, KW_RANGE, "range", 0)
+    kw(final, KW_AUTOCENTER, "autocenter", 0)
+    kw(final, KW_LEDS, "leds", 0)
+    kw(final, KW_FORCE, "force", 0)
+    kw(final, KW_STOP, "stop", 0)
+    kw(final, KW_WATCH, "watch", 0)
+    kw(final, KW_SERVICE, "service", 0)
+    kw(final, KW_FFB_REGISTER, "ffb-register", 0)
+    kw(final, KW_FFB_UNREGISTER, "ffb-unregister", 0)
+    kw(final, KW_HELP_LONG, "--help", 1)
+    kw(final, KW_HELP_SHORT, "-h", 1)
+    kw(final, KW_HELP_WORD, "help", 1)
+    kw(final, KW_OPT_RANGE, "--range", 0)
+    kw(final, KW_OPT_AUTOCENTER, "--autocenter", 0)
+    kw(final, KW_OPT_MS, "--milliseconds", 0)
+    kw(final, KW_OPT_IU, "--i-understand", 0)
+    kw(final, KW_INSTALL_PLAN, "install-plan", 0)
+}
+
+macro kw(final, id, text, sensitive) {
+    if final { kw_end(id, text) } else { kw_step(id, text, sensitive) }
+}
+
+; is the byte in c a .NET "white" character (U+0009..U+000D, U+0020)?
+macro if_white(c, then) {
+    local w, r {
+        ge_const(c, 9, w)
+        gt_const(c, 13, w)
+        ; w == 1 exactly for 9..13
+        if_eq(w, 1) { set(r, 1) }
+        if_eq(c, 32) { set(r, 1) }
+        if_nz(r) { then() }
+        clear(w)
+        clear(r)
+    }
+}
+
+macro if_digit(c, then) {
+    local w {
+        ge_const(c, '0', w)
+        gt_const(c, '9', w)
+        if_eq(w, 1) { then() }
+        clear(w)
+    }
+}
+
+; ap_mag = ap_mag * 10 + digit (with the int32 overflow rules of int.TryParse)
+macro int_accumulate(digit) {
+    if_nz(ap_min) { set(ap_ovf, 1) }
+    if_z(ap_ovf) {
+        local big, edge {
+            gt_const(ap_mag, 214748364, big)
+            if_nz(big) { set(ap_ovf, 1) }
+            if_eq(ap_mag, 214748364) { set(edge, 1) }
+            if_nz(edge) {
+                ; 214748364x: x <= 7 fits; 8 fits only as -2147483648
+                if_gt_const(digit, 7) {
+                    if_eq_else(digit, 8) {
+                        if_nz_else(ap_neg) { set(ap_min, 1) } { set(ap_ovf, 1) }
+                    } {
+                        set(ap_ovf, 1)
+                    }
+                }
+                if_lt_const(digit, 8) {
+                    add(ap_mag, 2147483640 - 214748364)
+                    copy(digit, ap_mag)
+                }
+            }
+            if_z(big) {
+                if_z(edge) {
+                    local t {
+                        move(ap_mag, t)
+                        move_mul(t, ap_mag, 10)
+                    }
+                    copy(digit, ap_mag)
+                }
+            }
+            clear(big)
+            clear(edge)
+        }
+    }
+}
+
+; int.TryParse(NumberStyles.Integer) as a state machine over ap_b:
+; 0 leading white, 1 after sign, 2 digits, 3 trailing white, 4 invalid.
+macro int_step() {
+    local d, isd, isw, done, s {
+        copy(ap_b, d)
+        copy(ap_st, s)
+        if_digit(ap_b) { set(isd, 1) }
+        if_white(ap_b) { set(isw, 1) }
+        if_nz(isd) { add(d, 0 - '0') }
+        if_z(isd) { clear(d) }
+        if_eq(s, 0) {
+            set(done, 1)
+            if_nz(isw) { clear(done) }
+            if_eq(ap_b, '+') { clear(done) set(ap_st, 1) }
+            if_eq(ap_b, '-') { clear(done) set(ap_st, 1) set(ap_neg, 1) }
+            if_nz(isd) { clear(done) set(ap_st, 2) int_accumulate(d) }
+            if_nz(done) { set(ap_st, 4) }
+            clear(done)
+        }
+        if_eq(s, 1) {
+            if_nz_else(isd) { set(ap_st, 2) int_accumulate(d) } { set(ap_st, 4) }
+        }
+        if_eq(s, 2) {
+            set(done, 1)
+            if_nz(isd) { clear(done) int_accumulate(d) }
+            if_nz(isw) { clear(done) set(ap_st, 3) }
+            if_nz(done) { set(ap_st, 4) }
+            clear(done)
+        }
+        if_eq(s, 3) {
+            if_z(isw) { set(ap_st, 4) }
+        }
+        clear(isd)
+        clear(isw)
+        clear(d)
+        clear(s)
+    }
+}
+
+; The whole argument has been read: ap_kw, ap_dd, ap_valid.
+macro arg_finish() {
+    clear(ap_kw)
+    keywords(1)
+    clear(ap_valid)
+    if_eq(ap_st, 2) { set(ap_valid, 1) }
+    if_eq(ap_st, 3) { set(ap_valid, 1) }
+    if_nz(ap_ovf) { clear(ap_valid) }
+}
+
+; Copies the parsed integer into the 5-cell record at a (found := 1).
+macro arg_int_to(a) {
+    cells_clear(a, 5)
+    set(a + I_FOUND, 1)
+    copy(ap_valid, a + I_VALID)
+    if_nz(ap_valid) {
+        copy(ap_neg, a + I_NEG)
+        copy(ap_mag, a + I_MAG)
+        copy(ap_min, a + I_MIN)
+    }
+}
+
+; Is keyword ap_kw allowed by EnsureOnlyNamedArguments for the command?
+macro if_option_allowed(then) {
+    local ok {
+        if_eq(cli_cmd, KW_INIT) { set(ok, 1) }
+        if_eq(cli_cmd, KW_WATCH) { set(ok, 1) }
+        if_eq(cli_cmd, KW_SERVICE) { set(ok, 1) }
+        if_eq(cli_cmd, KW_INSTALL_PLAN) { set(ok, 1) }
+        if_nz(ok) {
+            clear(ok)
+            if_eq(ap_kw, KW_OPT_RANGE) { set(ok, 2) }
+            if_eq(ap_kw, KW_OPT_AUTOCENTER) { set(ok, 2) }
+        }
+        if_eq(cli_cmd, KW_FORCE) {
+            if_eq(ap_kw, KW_OPT_MS) { set(ok, 2) }
+            if_eq(ap_kw, KW_OPT_IU) { set(ok, 2) }
+        }
+        if_eq(ok, 2) { then() }
+        clear(ok)
+    }
+}
+
+; Applies a finished argument to the command state (streaming versions of the
+; legacy RequiredInteger / NamedInteger / EnsureOnlyNamedArguments scans).
+macro arg_apply() {
+    if_z(cli_argi) {
+        if_eq(ap_kw, KW_HELP_LONG) { set(cli_help, 1) }
+        if_eq(ap_kw, KW_HELP_SHORT) { set(cli_help, 1) }
+        if_eq(ap_kw, KW_HELP_WORD) { set(cli_help, 1) }
+        if_lt_const(ap_kw, KW_HELP_LONG) { copy(ap_kw, cli_cmd) }
+        if_eq(ap_kw, KW_INSTALL_PLAN) { copy(ap_kw, cli_cmd) }
+        buf_copy(cur_buf, a0_buf)
+        clear(a0_len)
+        copy(ap_kept, a0_len)
+    }
+    if_nz(cli_argi) {
+        ; value of the previous option
+        if_eq(ci_want, KW_OPT_RANGE) { arg_int_to(o_range) }
+        if_eq(ci_want, KW_OPT_AUTOCENTER) { arg_int_to(o_ac) }
+        if_eq(ci_want, KW_OPT_MS) { arg_int_to(o_ms) }
+        clear(ci_want)
+        if_z(ci_index) { arg_int_to(p0) }
+        ; first occurrence of an option: its value is the next argument
+        if_eq(ap_kw, KW_OPT_RANGE) { if_z(o_range + I_FOUND) { set(o_range + I_FOUND, 1) set(ci_want, KW_OPT_RANGE) } }
+        if_eq(ap_kw, KW_OPT_AUTOCENTER) { if_z(o_ac + I_FOUND) { set(o_ac + I_FOUND, 1) set(ci_want, KW_OPT_AUTOCENTER) } }
+        if_eq(ap_kw, KW_OPT_MS) { if_z(o_ms + I_FOUND) { set(o_ms + I_FOUND, 1) set(ci_want, KW_OPT_MS) } }
+        if_eq(ap_kw, KW_OPT_IU) { set(ci_iu, 1) }
+        ; EnsureOnlyNamedArguments (force skips its first command argument)
+        local scan {
+            set(scan, 1)
+            if_nz(ci_off) { clear(scan) }
+            if_eq(cli_cmd, KW_FORCE) { if_z(ci_index) { clear(scan) } }
+            if_nz(scan) {
+                if_nz_else(ci_skip) { clear(ci_skip) } {
+                    if_nz(ap_dd) {
+                        local allowed {
+                            if_option_allowed() { set(allowed, 1) }
+                            if_nz_else(allowed) {
+                                if_ne(ap_kw, KW_OPT_IU) { set(ci_skip, 1) }
+                            } {
+                                set(ci_off, 1)
+                                buf_copy(cur_buf, off_buf)
+                                clear(ci_off_len)
+                                copy(ap_kept, ci_off_len)
+                            }
+                            clear(allowed)
+                        }
+                    }
+                }
+            }
+            clear(scan)
+        }
+        @ci_index +
+    }
+    @cli_argi +
+}
+
+; Reads one argument (u16 length + UTF-8 bytes) from the boot payload.
+macro arg_read() {
+    cells_clear(ap_pos, 14)
+    frame_in_u16(ap_len)
+    for k = 0 to KW_COUNT - 1 { set(ap_m + k, 1) }
+    buf_clear(cur_buf)
+    local n {
+        copy(ap_len, n)
+        while_nz(n) {
+            @n -
+            frame_in(ap_b)
+            ; lower case (ASCII only, as ToLowerInvariant for these keywords)
+            clear(ap_low)
+            copy(ap_b, ap_low)
+            local u {
+                ge_const(ap_b, 'A', u)
+                gt_const(ap_b, 'Z', u)
+                if_eq(u, 1) { add(ap_low, 32) }
+                clear(u)
+            }
+            ; one-hot position for the keyword tests
+            for j = 0 to 15 { if_eq(ap_pos, j) { set(ap_oh + j, 1) } }
+            keywords(0)
+            for j = 0 to 15 { clear(ap_oh + j) }
+            ; starts with "--"
+            if_eq(ap_pos, 0) { if_eq(ap_b, '-') { set(ap_dd0, 1) } }
+            if_eq(ap_pos, 1) { if_nz(ap_dd0) { if_eq(ap_b, '-') { set(ap_dd, 1) } } }
+            int_step()
+            ; keep the first BUF_SIZE bytes for echoing
+            if_lt_const(ap_kept, BUF_SIZE) {
+                buf_push(cur_buf, ap_b)
+                @ap_kept +
+            }
+            if_lt_const(ap_pos, 100) { @ap_pos + }
+            clear(ap_b)
+        }
+    }
+    arg_finish()
+    arg_apply()
+}
+
+; EV_BOOT payload after the role byte.
+macro cli_boot() {
+    local skip {
+        frame_in(skip)
+        frame_in(skip)
+        frame_in(skip)
+        clear(skip)
+    }
+    frame_in_u16(cli_argc)
+    local n {
+        copy(cli_argc, n)
+        while_nz(n) {
+            @n -
+            arg_read()
+        }
+    }
+    frame_skip()
+}
+
+; ===========================================================================
+; Messages
+; ===========================================================================
+
+macro out_err(text) { sink_text(text) }
+
+macro print_message() {
+    let e = err {
+        if_eq(e + E_MSG, M_NO_G29) { out_err("No Logitech G29 was found. Set the selector to PS3 and reconnect USB.") }
+        if_eq(e + E_MSG, M_PS4) { out_err("The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.") }
+        if_eq(e + E_MSG, M_MULTIPLE) { out_err("More than one G29 was found. Leave only the target wheel connected.") }
+        if_eq(e + E_MSG, M_COMPAT) { out_err("The G29 is in compatibility mode. Run 'g29ctl init' first.") }
+        if_eq(e + E_MSG, M_TIMEOUT) { out_err("The G29 did not reconnect in native mode. Reconnect USB and run init again.") }
+        if_eq(e + E_MSG, M_OPEN) { out_err("Unable to open the G29 HID interface for output. Close any program holding exclusive access and try again.") }
+        if_eq(e + E_MSG, M_WRITE) { out_err("The G29 rejected an output report.") }
+        if_eq(e + E_MSG, M_REPORT_LEN) {
+            out_err("The selected HID collection accepts ")
+            sink_dec(e + E_NUM)
+            out_err("-byte reports, but the G29 command requires 7 bytes.")
+        }
+        if_eq(e + E_MSG, M_NUMERIC) {
+            out_err("A numeric ")
+            if_eq(e + E_NAME, N_DEGREES) { out_err("degrees") }
+            if_eq(e + E_NAME, N_PERCENT) { out_err("percent") }
+            if_eq(e + E_NAME, N_MASK) { out_err("mask") }
+            if_eq(e + E_NAME, N_OPT_RANGE) { out_err("--range") }
+            if_eq(e + E_NAME, N_OPT_AUTOCENTER) { out_err("--autocenter") }
+            if_eq(e + E_NAME, N_OPT_MS) { out_err("--milliseconds") }
+            out_err(" value is required.")
+        }
+        if_eq(e + E_MSG, M_RANGE) {
+            if_eq(e + E_NAME, N_DEGREES) { out_err("Value must be between 40 and 900.\r\nParameter name: degrees") }
+            if_eq(e + E_NAME, N_PERCENT) { out_err("Value must be between 0 and 100.\r\nParameter name: percent") }
+            if_eq(e + E_NAME, N_MASK) { out_err("Value must be between 0 and 31.\r\nParameter name: mask") }
+            out_err("\r\nActual value was ")
+            sink_signed(e + E_NEG, e + E_MAG, e + E_MIN)
+            out_err(".")
+        }
+        if_eq(e + E_MSG, M_FORCE_LIMIT) {
+            out_err("The unverified hardware test is limited to -25 through 25 percent.\r\nParameter name: percent\r\nActual value was ")
+            sink_signed(e + E_NEG, e + E_MAG, e + E_MIN)
+            out_err(".")
+        }
+        if_eq(e + E_MSG, M_DURATION) {
+            out_err("Duration must be between 50 and 5000 milliseconds.\r\nParameter name: milliseconds\r\nActual value was ")
+            sink_signed(e + E_NEG, e + E_MAG, e + E_MIN)
+            out_err(".")
+        }
+        if_eq(e + E_MSG, M_ACK) { out_err("The force test requires --i-understand. Keep hands clear of the wheel.") }
+        if_eq(e + E_MSG, M_UNKNOWN_OPTION) {
+            out_err("Unknown option '")
+            sink_buf(off_buf, ci_off_len)
+            out_err("'.")
+        }
+        if_eq(e + E_MSG, M_FFB_MISSING) { out_err("The force feedback driver was not found.") }
+        if_eq(e + E_MSG, M_FOREIGN) {
+            out_err("Another force feedback driver (")
+            sink_buf(FOREIGN_BUF, foreign_len)
+            out_err(") is registered for the G29 in ")
+            if_eq_else(e + E_NUM, R_HKCU) { out_err("HKEY_CURRENT_USER") } { out_err("HKEY_LOCAL_MACHINE") }
+            out_err(". Remove it before installing this one.")
+        }
+        if_eq(e + E_MSG, M_REGISTRY) {
+            out_err("The DirectInput registration could not be changed (Windows error ")
+            sink_dec(e + E_NUM)
+            out_err(").")
+        }
+        if_eq(e + E_MSG, M_UNKNOWN_COMMAND) {
+            out_err("Unknown command '")
+            sink_buf(a0_buf, a0_len)
+            out_err("'. Run g29ctl --help.")
+        }
+    }
+}
+
+macro print_usage() {
+    con_text(1, "G29 STANDALONE HID NECROMANCER // G_HUB == NULL\r\n\r\nAVAILABLE INCANTATIONS:\r\n")
+    con_text(1, "  g29ctl status\r\n  g29ctl doctor\r\n  g29ctl init [--range 40..900] [--autocenter 0..100]\r\n")
+    con_text(1, "  g29ctl range <40..900>\r\n  g29ctl autocenter <0..100>\r\n  g29ctl leds <0..31>\r\n")
+    con_text(1, "  g29ctl force <-25..25> [--milliseconds 50..5000] --i-understand\r\n  g29ctl stop\r\n")
+    con_text(1, "  g29ctl watch [--range 40..900] [--autocenter 0..100]\r\n")
+}
+
+; ===========================================================================
+; HID commands
+; ===========================================================================
+
+macro put_token(t) {
+    for k = 0 to 3 { put(t + k) }
+}
+
+macro emit_hid_open(t) {
+    emit_header(0x91, 4)
+    put_token(t)
+}
+
+macro emit_hid_close(t) {
+    emit_header(0x92, 4)
+    put_token(t)
+}
+
+; Report w_index (0 or 1) of rpt to the selected wheel.
+macro emit_hid_write() {
+    emit_header(0x93, 13)
+    put_token(sel_tok)
+    out_u16_const(7)
+    if_z(w_index) { for k = 0 to 6 { put(rpt + k) } }
+    if_nz(w_index) { for k = 7 to 13 { put(rpt + k) } }
+}
+
+; CMD_TIMER_ARM one-shot, timer id and interval (ms) constant.
+macro emit_timer_const(id, ms) {
+    emit_header(0xA0, 6)
+    out_const(id)
+    out_const(0)
+    out_const(ms % 256)
+    out_const(ms / 256 % 256)
+    out_const(0)
+    out_const(0)
+}
+
+; Win32 result u32 of an OPEN/WRITE result (after its token): flag += non-zero.
+macro read_win32(flag) {
+    local skip, b {
+        for k = 0 to 3 {
+            frame_in(skip)
+            clear(skip)
+        }
+        for k = 0 to 3 {
+            frame_in(b)
+            if_nz(b) { set(flag, 1) }
+            clear(b)
+        }
+    }
+}
+
+; ===========================================================================
+; Device enumeration: EV_HID_DEVICE
+; ===========================================================================
+
+macro dev_read_u16(lo, hi) {
+    frame_in(lo)
+    frame_in(hi)
+}
+
+macro dev_value_u16(lo, hi, value) {
+    clear(value)
+    copy(lo, value)
+    local t {
+        copy_mul(hi, t, 16)
+        move_mul(t, value, 16)
+    }
+}
+
+macro print_status_line() {
+    con_buf(1, cur_buf, d_len)
+    con_text(1, " | VID ")
+    con_hex4(1, d_vid_hi, d_vid_lo)
+    con_text(1, " PID ")
+    con_hex4(1, d_pid_hi, d_pid_lo)
+    con_text(1, " REV ")
+    con_hex4(1, d_rev_hi, d_rev_lo)
+    if_nz_else(d_native) { con_text(1, " | native | HID ") } { con_text(1, " | compatibility | HID ") }
+    con_hex2(1, d_page_lo)
+    con_text(1, ":")
+    con_hex2(1, d_use_lo)
+    con_text(1, ", reports in/out ")
+    con_dec(1, d_in)
+    con_text(1, "/")
+    con_dec(1, d_out)
+    con_text(1, "\r\n")
+}
+
+; Reads a text field; when keep != 0 stores it (lower-cased when lower != 0,
+; at most BUF_SIZE bytes) in buffer b and its length in count.
+macro dev_text(keep, b, count, lower) {
+    buf_clear(b)
+    clear(count)
+    local n, c {
+        frame_in_u16(n)
+        while_nz(n) {
+            @n -
+            frame_in(c)
+            if_nz(keep) {
+                if lower {
+                    local u {
+                        ge_const(c, 'A', u)
+                        gt_const(c, 'Z', u)
+                        if_eq(u, 1) { add(c, 32) }
+                        clear(u)
+                    }
+                }
+                if_lt_const(count, BUF_SIZE) {
+                    buf_push(b, c)
+                    @count +
+                }
+            }
+            clear(c)
+        }
+    }
+}
+
+macro on_hid_device() {
+    for k = 0 to 3 {
+        clear(d_tok + k)
+        frame_in(d_tok + k)
+    }
+    dev_read_u16(d_vid_lo, d_vid_hi)
+    dev_read_u16(d_pid_lo, d_pid_hi)
+    dev_read_u16(d_rev_lo, d_rev_hi)
+    dev_read_u16(d_page_lo, d_page_hi)
+    dev_read_u16(d_use_lo, d_use_hi)
+    local lo, hi {
+        dev_read_u16(lo, hi)
+        dev_value_u16(lo, hi, d_in)
+        clear(lo)
+        clear(hi)
+        dev_read_u16(lo, hi)
+        dev_value_u16(lo, hi, d_out)
+        clear(lo)
+        clear(hi)
+    }
+    ; classification: Logitech vendor, Generic Desktop joystick or game pad,
+    ; then the protocol's G29 identification
+    clear(d_cfg)
+    clear(d_ps4)
+    clear(d_native)
+    local ok {
+        if_eq(d_vid_lo, 0x6D) { if_eq(d_vid_hi, 0x04) { @ok + } }
+        if_eq(d_page_lo, 0x01) { if_z(d_page_hi) { @ok + } }
+        if_z(d_use_hi) {
+            if_eq(d_use_lo, 0x04) { @ok + }
+            if_eq(d_use_lo, 0x05) { @ok + }
+        }
+        if_eq(ok, 3) {
+            cells_clear(pr_arg1, 4)
+            copy(d_pid_hi, pr_arg1)
+            copy(d_pid_lo, pr_arg2)
+            copy(d_rev_hi, pr_arg3)
+            copy(d_rev_lo, pr_arg4)
+            proto_identify()
+            if_eq(pr_flags, 3) { set(d_cfg, 1) set(d_native, 1) }
+            if_eq(pr_flags, 2) { set(d_cfg, 1) }
+            if_eq(pr_flags, 4) { set(d_ps4, 1) }
+            cells_clear(pr_arg1, 4)
+            clear(pr_flags)
+        }
+        clear(ok)
+    }
+    ; the path identifies the interface across enumerations (compared ignoring
+    ; ASCII case, like the legacy monitor); the product name is for messages.
+    ; Both are kept only for configurable G29s.
+    dev_text(d_cfg, cur_path, cur_path_len, 1)
+    dev_text(d_cfg, cur_buf, d_len, 0)
+    if_nz(d_cfg) {
+        ; no product string reported: the legacy tool called it "Logitech G29"
+        if_z(d_len) {
+            local c {
+                for ch in "Logitech G29" {
+                    set(c, ch)
+                    buf_push(cur_buf, c)
+                    @d_len +
+                }
+                clear(c)
+            }
+        }
+    }
+    if_nz(d_ps4) { @n_ps4 + }
+    if_nz(d_cfg) {
+        if_z(n_g29) {
+            cells_copy(d_tok, sel_tok, 4)
+            clear(sel_native)
+            copy(d_native, sel_native)
+            clear(sel_out)
+            copy(d_out, sel_out)
+            clear(sel_len)
+            copy(d_len, sel_len)
+            buf_copy(cur_buf, sel_buf)
+            clear(sel_path_len)
+            copy(cur_path_len, sel_path_len)
+            buf_copy(cur_path, sel_path)
+        }
+        if_nz(d_native) {
+            if_z(n_nat) {
+                cells_copy(d_tok, nat_tok, 4)
+                clear(nat_out)
+                copy(d_out, nat_out)
+                clear(nat_len)
+                copy(d_len, nat_len)
+                buf_copy(cur_buf, nat_buf)
+                clear(nat_path_len)
+                copy(cur_path_len, nat_path_len)
+                buf_copy(cur_path, nat_path)
+            }
+            @n_nat +
+        }
+        @n_g29 +
+        if_nz(cli_print) { print_status_line() }
+    }
+}
+
+; ===========================================================================
+; States
+; ===========================================================================
+
+; ---- find devices ----
+macro st_find() {
+    if_eq(cli_cur, F_START) {
+        clear(n_g29)
+        clear(n_ps4)
+        clear(n_nat)
+        emit_header(0x90, 0)
+        await_state(F_BEGIN)
+    }
+    if_eq(cli_cur, F_BEGIN) {
+        if_eq(fr_type, EV_HID_ENUM_BEGIN) {
+            consumed()
+            await_state(F_DEVICES)
+        }
+    }
+    if_eq(cli_cur, F_DEVICES) {
+        if_eq(fr_type, EV_HID_DEVICE) {
+            on_hid_device()
+            consumed()
+            set(cli_wait, 1)
+        }
+        if_eq(fr_type, EV_HID_ENUM_END) {
+            consumed()
+            clear(cli_state)
+            copy(find_ret, cli_state)
+        }
+    }
+}
+
+; ---- require exactly one configurable wheel (native too when req_native) ----
+macro st_require() {
+    if_eq(cli_cur, RN_START) {
+        set(req_native, 1)
+        set(find_ret, R_CHECK)
+        goto_state(F_START)
+    }
+    if_eq(cli_cur, R_START) {
+        clear(req_native)
+        set(find_ret, R_CHECK)
+        goto_state(F_START)
+    }
+    if_eq(cli_cur, R_CHECK) {
+        local done {
+            if_z(n_g29) {
+                set(done, 1)
+                if_nz_else(n_ps4) { fail(M_PS4) } { fail(M_NO_G29) }
+            }
+            if_gt_const(n_g29, 1) {
+                set(done, 1)
+                fail(M_MULTIPLE)
+            }
+            if_z(done) {
+                if_nz(req_native) {
+                    if_z(sel_native) {
+                        set(done, 1)
+                        fail(M_COMPAT)
+                    }
+                }
+            }
+            if_z(done) {
+                clear(cli_state)
+                copy(req_ret, cli_state)
+            }
+            clear(done)
+        }
+    }
+}
+
+; ---- send the pr_count reports in rpt to the selected wheel ----
+macro st_send() {
+    if_eq(cli_cur, W_START) {
+        emit_hid_open(sel_tok)
+        await_state(W_OPENED)
+    }
+    if_eq(cli_cur, W_OPENED) {
+        if_eq(fr_type, EV_HID_OPEN_RESULT) {
+            local bad {
+                read_win32(bad)
+                consumed()
+                if_nz_else(bad) { fail(M_OPEN) } {
+                    clear(w_index)
+                    goto_state(W_NEXT)
+                }
+                clear(bad)
+            }
+        }
+    }
+    if_eq(cli_cur, W_NEXT) {
+        local short {
+            lt_const(sel_out, 7, short)
+            if_nz_else(short) {
+                emit_hid_close(sel_tok)
+                cells_clear(err + E_NUM, 1)
+                copy(sel_out, err + E_NUM)
+                fail(M_REPORT_LEN)
+            } {
+                emit_hid_write()
+                await_state(W_WRITTEN)
+            }
+            clear(short)
+        }
+    }
+    if_eq(cli_cur, W_WRITTEN) {
+        if_eq(fr_type, EV_HID_WRITE_RESULT) {
+            local bad {
+                read_win32(bad)
+                consumed()
+                if_nz_else(bad) {
+                    emit_hid_close(sel_tok)
+                    fail(M_WRITE)
+                } {
+                    @w_index +
+                    local more {
+                        lt(w_index, pr_count, more)
+                        if_nz_else(more) { goto_state(W_NEXT) } {
+                            emit_hid_close(sel_tok)
+                            clear(cli_state)
+                            copy(send_ret, cli_state)
+                        }
+                        clear(more)
+                    }
+                }
+                clear(bad)
+            }
+        }
+    }
+}
+
+; ---- wait up to 8 s (250 ms polls) for the native wheel ----
+macro st_wait_native() {
+    if_eq(cli_cur, N_START) {
+        emit_timer_const(0, 0)
+        await_state(N_T0)
+    }
+    if_eq(cli_cur, N_T0) {
+        if_eq(fr_type, EV_TIMER) {
+            clear(t_id)
+            copy(ev_tid, t_id)
+            if_z(t_id) {
+                clear(t_start_hi)
+                clear(t_start_lo)
+                time_read(t_start_hi, t_start_lo)
+                set(find_ret, N_CHECK)
+                goto_state(F_START)
+                clear(cli_have)
+            }
+            frame_skip()
+            clear(t_id)
+        }
+    }
+    if_eq(cli_cur, N_CHECK) {
+        if_nz_else(n_nat) {
+            cells_copy(nat_tok, sel_tok, 4)
+            set(sel_native, 1)
+            clear(sel_out)
+            copy(nat_out, sel_out)
+            clear(sel_len)
+            copy(nat_len, sel_len)
+            buf_copy(nat_buf, sel_buf)
+            clear(sel_path_len)
+            copy(nat_path_len, sel_path_len)
+            buf_copy(nat_path, sel_path)
+            clear(cli_state)
+            copy(wn_ret, cli_state)
+        } {
+            emit_timer_const(0, 250)
+            await_state(N_TICK)
+        }
+    }
+    if_eq(cli_cur, N_TICK) {
+        if_eq(fr_type, EV_TIMER) {
+            clear(t_id)
+            copy(ev_tid, t_id)
+            if_z(t_id) {
+                clear(t_now_hi)
+                clear(t_now_lo)
+                time_read(t_now_hi, t_now_lo)
+                clear(cli_have)
+                local late {
+                    time_elapsed_ge(t_now_hi, t_now_lo, t_start_hi, t_start_lo, 8000000, late)
+                    if_nz_else(late) { fail(M_TIMEOUT) } {
+                        set(find_ret, N_CHECK)
+                        goto_state(F_START)
+                    }
+                    clear(late)
+                }
+            }
+            frame_skip()
+            clear(t_id)
+        }
+    }
+}
+
+; ---- status ----
+macro st_status() {
+    if_eq(cli_cur, ST_1) {
+        set(cli_print, 1)
+        set(find_ret, ST_2)
+        goto_state(F_START)
+    }
+    if_eq(cli_cur, ST_2) {
+        clear(cli_print)
+        if_nz_else(n_g29) {
+            set(cli_exit, 0)
+        } {
+            if_nz_else(n_ps4) {
+                con_text(1, "THE ORACLE SEES A G29 WEARING ITS PS4 MASK. The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.\r\n")
+            } {
+                con_text(1, "THE ORACLE SEES NO LOGITECH G29. Check USB + PS3 mode.\r\n")
+            }
+            set(cli_exit, 2)
+        }
+        goto_state(S_EXIT)
+    }
+}
+
+; ---- range / autocenter / leds / stop: require native, one report, message ----
+; first: positional integer check; second: bounds + report; third: message
+macro simple_command(first, second, third, name, lo, hi, report, message) {
+    if_eq(cli_cur, first) {
+        if_nz_else(p0 + I_VALID) {
+            set(req_ret, second)
+            goto_state(RN_START)
+        } {
+            set(err + E_NAME, name)
+            fail(M_NUMERIC)
+        }
+    }
+    if_eq(cli_cur, second) {
+        local ok {
+            int_in_range(p0, lo, hi, ok)
+            if_nz_else(ok) {
+                cells_clear(pr_arg1, 2)
+                copy(p0 + I_MAG, pr_arg1)
+                report()
+                cells_clear(pr_arg1, 2)
+                set(send_ret, third)
+                goto_state(W_START)
+            } {
+                set(err + E_NAME, name)
+                err_value(p0)
+                fail(M_RANGE)
+            }
+            clear(ok)
+        }
+    }
+    if_eq(cli_cur, third) {
+        con_text(1, message)
+        set(cli_exit, 0)
+        goto_state(S_EXIT)
+    }
+}
+
+macro st_stop() {
+    if_eq(cli_cur, SP_1) {
+        set(req_ret, SP_2)
+        goto_state(RN_START)
+    }
+    if_eq(cli_cur, SP_2) {
+        proto_stop()
+        set(send_ret, SP_3)
+        goto_state(W_START)
+    }
+    if_eq(cli_cur, SP_3) {
+        con_text(1, "FORCE EXORCISED. The wheel has been released.\r\n")
+        set(cli_exit, 0)
+        goto_state(S_EXIT)
+    }
+}
+
+; ---- init ----
+; Copies option record a (or the default when not given) to v (neg, mag, min).
+macro option_value(a, v, default) {
+    cells_clear(v, 3)
+    if_nz_else(a + I_FOUND) {
+        copy(a + I_NEG, v)
+        copy(a + I_MAG, v + 1)
+        copy(a + I_MIN, v + 2)
+    } {
+        add(v + 1, default)
+    }
+}
+
+; Leaves m != 0 when option record a was given without a valid value.
+macro option_invalid(a, m) {
+    if_nz(a + I_FOUND) { if_z(a + I_VALID) { set(m, 1) } }
+}
+
+; flag += (v (neg, mag, min) lies in lo..hi)
+macro value_in_range(v, lo, hi, flag) {
+    local bad {
+        if_nz(v + 2) { set(bad, 1) }
+        if_nz(v) { if_nz(v + 1) { set(bad, 1) } }
+        lt_const(v + 1, lo, bad)
+        gt_const(v + 1, hi, bad)
+        if_z(bad) { @flag + }
+        clear(bad)
+    }
+}
+
+macro value_error(v, name) {
+    set(err + E_NAME, name)
+    cells_clear(err + E_NEG, 3)
+    copy(v, err + E_NEG)
+    copy(v + 1, err + E_MAG)
+    copy(v + 2, err + E_MIN)
+    fail(M_RANGE)
+}
+
+macro st_init() {
+    if_eq(cli_cur, IN_1) {
+        local bad, done {
+            option_invalid(o_range, bad)
+            if_nz(bad) {
+                set(done, 1)
+                set(err + E_NAME, N_OPT_RANGE)
+                fail(M_NUMERIC)
+            }
+            clear(bad)
+            if_z(done) {
+                option_invalid(o_ac, bad)
+                if_nz(bad) {
+                    set(done, 1)
+                    set(err + E_NAME, N_OPT_AUTOCENTER)
+                    fail(M_NUMERIC)
+                }
+                clear(bad)
+            }
+            if_z(done) {
+                if_nz(ci_off) {
+                    set(done, 1)
+                    fail(M_UNKNOWN_OPTION)
+                }
+            }
+            if_z(done) {
+                option_value(o_range, v_range, 900)
+                option_value(o_ac, v_ac, 0)
+                set(req_ret, IN_2)
+                goto_state(R_START)
+            }
+            clear(done)
+        }
+    }
+    if_eq(cli_cur, IN_2) {
+        if_nz_else(sel_native) { goto_state(IN_4) } {
+            proto_native()
+            set(send_ret, IN_3)
+            goto_state(W_START)
+        }
+    }
+    if_eq(cli_cur, IN_3) {
+        set(wn_ret, IN_4)
+        goto_state(N_START)
+    }
+    if_eq(cli_cur, IN_4) {
+        local ok {
+            value_in_range(v_range, 40, 900, ok)
+            if_nz_else(ok) {
+                cells_clear(pr_arg1, 2)
+                copy(v_range + 1, pr_arg1)
+                proto_range()
+                cells_clear(pr_arg1, 2)
+                set(send_ret, IN_5)
+                goto_state(W_START)
+            } {
+                value_error(v_range, N_DEGREES)
+            }
+            clear(ok)
+        }
+    }
+    if_eq(cli_cur, IN_5) {
+        local ok {
+            value_in_range(v_ac, 0, 100, ok)
+            if_nz_else(ok) {
+                cells_clear(pr_arg1, 2)
+                copy(v_ac + 1, pr_arg1)
+                proto_autocenter()
+                cells_clear(pr_arg1, 2)
+                set(send_ret, IN_6)
+                goto_state(W_START)
+            } {
+                value_error(v_ac, N_PERCENT)
+            }
+            clear(ok)
+        }
+    }
+    if_eq(cli_cur, IN_6) {
+        cells_clear(pr_arg1, 2)
+        proto_leds()
+        set(send_ret, IN_7)
+        goto_state(W_START)
+    }
+    if_eq(cli_cur, IN_7) {
+        if_nz_else(mon_mode) { goto_state(M_CONFIGURED) } {
+            con_text(1, "SUMMONING COMPLETE: ")
+            con_buf(1, sel_buf, sel_len)
+            con_text(1, " -> native mode | ")
+            con_dec(1, v_range + 1)
+            con_text(1, " degrees | ")
+            con_dec(1, v_ac + 1)
+            con_text(1, "% autocenter.\r\n")
+            set(cli_exit, 0)
+            goto_state(S_EXIT)
+        }
+    }
+}
+
+; ---- force: bounded diagnostic, stop in every path ----
+macro st_force() {
+    if_eq(cli_cur, FO_1) {
+        local ok, done {
+            ; order as legacy RunForceTest: percent, --milliseconds, percent bound,
+            ; acknowledgement, unknown options, duration bound
+            if_z(p0 + I_VALID) {
+                set(done, 1)
+                set(err + E_NAME, N_PERCENT)
+                fail(M_NUMERIC)
+            }
+            if_z(done) {
+                option_invalid(o_ms, ok)
+                if_nz(ok) {
+                    set(done, 1)
+                    set(err + E_NAME, N_OPT_MS)
+                    fail(M_NUMERIC)
+                }
+                clear(ok)
+            }
+            if_z(done) {
+                int_abs_le(p0, 25, ok)
+                if_z(ok) {
+                    set(done, 1)
+                    err_value(p0)
+                    fail(M_FORCE_LIMIT)
+                }
+                clear(ok)
+            }
+            if_z(done) {
+                if_z(ci_iu) {
+                    set(done, 1)
+                    fail(M_ACK)
+                }
+            }
+            if_z(done) {
+                if_nz(ci_off) {
+                    set(done, 1)
+                    fail(M_UNKNOWN_OPTION)
+                }
+            }
+            if_z(done) {
+                option_value(o_ms, v_pct, 500)
+                value_in_range(v_pct, 50, 5000, ok)
+                if_z(ok) {
+                    set(done, 1)
+                    err_value(o_ms)
+                    fail(M_DURATION)
+                }
+                clear(v_ms)
+                copy(v_pct + 1, v_ms)
+                cells_clear(v_pct, 3)
+                clear(ok)
+            }
+            if_z(done) {
+                ; from here on every failure and every cancel ends in the stop report
+                set(in_force, 1)
+                set(err_ret, FO_FIN)
+                set(req_ret, FO_2)
+                goto_state(RN_START)
+            }
+            clear(done)
+        }
+    }
+    if_eq(cli_cur, FO_2) {
+        cells_clear(pr_arg1, 2)
+        proto_autocenter()
+        set(send_ret, FO_3)
+        goto_state(W_START)
+    }
+    if_eq(cli_cur, FO_3) {
+        set(req_ret, FO_4)
+        goto_state(RN_START)
+    }
+    if_eq(cli_cur, FO_4) {
+        cells_clear(pr_arg1, 2)
+        if_nz(p0 + I_MAG) { copy(p0 + I_NEG, pr_arg1) }
+        copy(p0 + I_MAG, pr_arg2)
+        proto_force()
+        cells_clear(pr_arg1, 2)
+        set(send_ret, FO_5)
+        goto_state(W_START)
+    }
+    if_eq(cli_cur, FO_5) {
+        if_nz_else(cancelled) { goto_state(FO_FIN) } {
+            emit_header(0xA0, 6)
+            out_const(1)
+            out_const(0)
+            out_u32(v_ms)
+            await_state(FO_WAIT)
+        }
+    }
+    if_eq(cli_cur, FO_WAIT) {
+        if_eq(fr_type, EV_TIMER) {
+            clear(t_id)
+            copy(ev_tid, t_id)
+            if_eq(t_id, 1) {
+                clear(cli_have)
+                goto_state(FO_FIN)
+            }
+            frame_skip()
+            clear(t_id)
+        }
+    }
+    if_eq(cli_cur, FO_FIN) {
+        ; finally: remember any earlier error, then stop the force
+        cells_clear(pend, 6)
+        cells_copy(err, pend, 6)
+        cells_clear(err, 6)
+        set(err_ret, S_FAIL)
+        set(req_ret, FO_STOP)
+        goto_state(RN_START)
+    }
+    if_eq(cli_cur, FO_STOP) {
+        proto_stop()
+        set(send_ret, FO_DONE)
+        goto_state(W_START)
+    }
+    if_eq(cli_cur, FO_DONE) {
+        clear(in_force)
+        if_nz_else(pend + E_MSG) {
+            cells_copy(pend, err, 6)
+            cells_clear(pend, 6)
+            goto_state(S_FAIL)
+        } {
+            con_text(1, "FORCE RITUAL COMPLETE. STOP REPORT SENT. Please continue possessing the wheel responsibly.\r\n")
+            set(cli_exit, 0)
+            goto_state(S_EXIT)
+        }
+    }
+}
+
+; ---- command selection ----
+macro st_start() {
+    if_eq(cli_cur, S_START) {
+        set(err_ret, S_FAIL)
+        local done {
+            if_z(cli_argc) { set(done, 1) }
+            if_nz(cli_help) { set(done, 1) }
+            if_nz_else(done) {
+                print_usage()
+                set(cli_exit, 0)
+                goto_state(S_EXIT)
+            } {
+                if_z(cli_cmd) { fail(M_UNKNOWN_COMMAND) }
+                if_eq(cli_cmd, KW_STATUS) { goto_state(ST_1) }
+                if_eq(cli_cmd, KW_INIT) { goto_state(IN_1) }
+                if_eq(cli_cmd, KW_RANGE) { goto_state(RG_1) }
+                if_eq(cli_cmd, KW_AUTOCENTER) { goto_state(AC_1) }
+                if_eq(cli_cmd, KW_LEDS) { goto_state(LD_1) }
+                if_eq(cli_cmd, KW_STOP) { goto_state(SP_1) }
+                if_eq(cli_cmd, KW_FORCE) { goto_state(FO_1) }
+                if_eq(cli_cmd, KW_DOCTOR) { goto_state(DR_1) }
+                if_eq(cli_cmd, KW_WATCH) { goto_state(WA_1) }
+                if_eq(cli_cmd, KW_SERVICE) { goto_state(SV_1) }
+                if_eq(cli_cmd, KW_FFB_REGISTER) { goto_state(FR_1) }
+                if_eq(cli_cmd, KW_FFB_UNREGISTER) { goto_state(FU_1) }
+                if_eq(cli_cmd, KW_INSTALL_PLAN) { goto_state(IP_1) }
+            }
+            clear(done)
+        }
+    }
+    if_eq(cli_cur, S_FAIL) {
+        set(sink, 2)
+        sink_text("[THE VOID OBJECTS] ")
+        print_message()
+        con_text(2, "\r\n")
+        set(cli_exit, 1)
+        goto_state(S_EXIT)
+    }
+    if_eq(cli_cur, S_EXIT) {
+        emit_exit_code()
+        clear(running)
+    }
+}
+
+; Ctrl+C / shutdown while a command runs. Outside the force test and the
+; monitor the legacy tool simply died (exit code STATUS_CONTROL_C_EXIT). During
+; the force test the stop report must still be sent: mark the cancel and, if
+; already waiting out the duration, go straight to the stop. The monitor stops
+; after its current check (monitor.bfa).
+macro cli_async() {
+    local async {
+        if_eq(fr_type, EV_CANCEL) { set(async, 1) }
+        if_eq(fr_type, EV_SHUTDOWN) { set(async, 1) }
+        if_eq(fr_type, EV_SERVICE_STOP) { set(async, 1) }
+        if_eq(fr_type, EV_SERVICE_SHUTDOWN) { set(async, 1) }
+        if_nz(async) {
+            consumed()
+            set(cli_wait, 1)
+            local handled_here {
+                if_nz(in_force) {
+                    set(handled_here, 1)
+                    set(cancelled, 1)
+                    if_eq(cli_state, FO_WAIT) {
+                        emit_header(0xA1, 1)
+                        out_const(1)
+                        clear(cli_wait)
+                        goto_state(FO_FIN)
+                    }
+                }
+                if_z(handled_here) {
+                    if_nz(mon_mode) {
+                        set(handled_here, 1)
+                        mon_async_stop()
+                    }
+                }
+                if_z(handled_here) {
+                    emit_exit(EXIT_CTRL_C)
+                    clear(running)
+                }
+                clear(handled_here)
+            }
+        }
+        clear(async)
+    }
+}
+
+; The CLI event loop (runs after EV_BOOT role 1 until CMD_EXIT).
+macro cli_main() {
+    goto_state(S_START)
+    while_nz(running) {
+        if_nz(cli_wait) {
+            frame_read_header()
+            if_nz_else(fr_bad) {
+                emit_abi_error(1)
+                emit_exit(70)
+                clear(running)
+                clear(cli_wait)
+            } {
+                clear(cli_wait)
+                set(cli_have, 1)
+                clear(ev_tid)
+                if_eq(fr_type, EV_TIMER) { frame_in(ev_tid) }
+                wd_async()
+                if_nz(cli_have) { cli_async() }
+            }
+        }
+        if_nz(running) {
+            if_z(cli_wait) {
+                clear(cli_cur)
+                copy(cli_state, cli_cur)
+                st_start()
+                st_find()
+                st_require()
+                st_send()
+                st_wait_native()
+                st_status()
+                simple_command(RG_1, RG_2, RG_3, N_DEGREES, 40, 900, { proto_range() }, "PLEASE ACCEPT: steering range has been rewritten.\r\n")
+                simple_command(AC_1, AC_2, AC_3, N_PERCENT, 0, 100, { proto_autocenter() }, "PLEASE ACCEPT: autocenter now obeys the new percentage.\r\n")
+                simple_command(LD_1, LD_2, LD_3, N_MASK, 0, 31, { proto_leds() }, "THE FIVE TINY SUNS HAVE BEEN RECONFIGURED.\r\n")
+                st_stop()
+                st_init()
+                st_force()
+                st_monitor()
+                st_watchdog()
+                st_install_plan()
+                st_registration()
+                st_doctor()
+                clear(cli_cur)
+                ; an event the current state did not want (for example a stale
+                ; timer): drop it and keep waiting
+                if_nz(cli_have) {
+                    consumed()
+                    set(cli_wait, 1)
+                }
+            }
+        }
+    }
+}

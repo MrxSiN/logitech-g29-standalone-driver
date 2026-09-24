@@ -1,0 +1,8 @@
+artifacts/
+**/obj/
+*.user
+*.suo
+AGENT.md
+CLAUDE.md
+FULL_BRAINFUCK_REWRITE.md
+MIGRATION.md

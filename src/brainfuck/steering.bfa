@@ -1,0 +1,237 @@
+; ===========================================================================
+; steering.bfa - steering motion for condition effects (legacy HidSteeringReader)
+; ===========================================================================
+;
+; The bridge hands over the raw steering value (HID usage Generic Desktop X,
+; extracted generically) and a microsecond timestamp for every input report;
+; the program keeps position, velocity and acceleration and answers the motion
+; the effect engine needs (DirectInput units, -10000..10000).
+;
+; Legacy arithmetic (doubles):
+;   sample   = (raw - (max + min) / 2) / ((max - min) / 2) * 10000
+;   elapsed  = max(0.5 ms, now - last)
+;   velocity += 0.4 * ((sample - position) / elapsed * 10000 / 40000 - velocity)
+;   accel    += 0.4 * ((velocity - previous velocity) / elapsed * 40000 / 400000 - accel)
+;   motion   = round(position), and velocity/acceleration unless no sample
+;              arrived for more than 50 ms (then 0), each clamped to +-10000
+;
+; Here: signed wide fixed point, position and velocity in 1/65536 units,
+; acceleration in 1/4096 units. Every division is floor(x * k1 * k2 ... / d)
+; with an exact remainder chain, so the only error is one truncation per step.
+; Deliberate limits: a sample more than three half-ranges from the centre
+; saturates there (the G29 axis never reports outside its logical range);
+; intervals above 2^36 us (19 hours) count as 2^36 us; an empty logical range
+; gives position 0.
+
+; Effective logical range. Inputs st_minn/st_min, st_maxn/st_max, st_bits;
+; a new reader starts without samples.
+macro st_axis() {
+    local dn, d[3], fallback {
+        ; max <= min: fall back to 0 .. 2^min(bits, 31) - 1
+        w_copy(st_max, d)
+        copy(st_maxn, dn)
+        ws_sub(dn, d, st_minn, st_min)
+        if_nz(dn) { set(fallback, 1) }
+        local z { w_is_zero(d, z) if_nz(z) { set(fallback, 1) } clear(z) }
+        if_nz(fallback) {
+            clear(st_minn)
+            w_clear(st_min)
+            clear(st_maxn)
+            w_clear(st_max)
+            set(st_max, 1)
+            min_const(st_bits, 31)
+            times(st_bits) { w_mul_const(st_max, 2) }
+            local one[3] { set(one, 1) w_sub(st_max, one) clear(one) }
+        }
+        clear(dn)
+        w_clear(d)
+        clear(fallback)
+    }
+    ; range = max - min (never negative now), sum = max + min
+    w_copy(st_max, st_range)
+    local rn {
+        copy(st_maxn, rn)
+        ws_sub(rn, st_range, st_minn, st_min)
+        clear(rn)
+    }
+    w_copy(st_max, st_sum)
+    clear(st_sumn)
+    copy(st_maxn, st_sumn)
+    ws_add(st_sumn, st_sum, st_minn, st_min)
+    clear(st_has)
+    w_clear(st_last)
+    clear(st_pn)
+    w_clear(st_p)
+    clear(st_vn)
+    w_clear(st_v)
+    clear(st_an)
+    w_clear(st_a)
+}
+
+; (on, o) = round((vn, v) / 2^(2 * shift)) clamped to 10000, for shift 8 or 6.
+macro st_round(vn, v, shift, on, o) {
+    clear(on)
+    clear(o)
+    local w[3], r, k, big {
+        w_copy(v, w)
+        local h[3] {
+            if shift == 8 { set(h, 32768) }
+            if shift == 6 { set(h, 2048) }
+            w_add(w, h)
+            w_clear(h)
+        }
+        let unit = shift == 8 ? 256 : 64 {
+            add(k, unit)
+            w_div_cell(w, k, r)
+            clear(r)
+            w_div_cell(w, k, r)
+            clear(r)
+            clear(k)
+        }
+        local fits { w_fits(w, fits) if_z(fits) { set(big, 1) } clear(fits) }
+        if_z(big) {
+            w_to_cell(w, o)
+            gt_const(o, 10000, big)
+        }
+        if_nz(big) { set(o, 10000) }
+        clear(big)
+        w_clear(w)
+    }
+    if_nz(o) { copy(vn, on) }
+}
+
+; One accepted input report: st_raw (wide) at time st_now (wide).
+macro st_sample() {
+    local sn, s[3] {
+        ; n = 2 raw - (max + min), saturated at three ranges
+        local nn, n[3] {
+            w_copy(st_raw, n)
+            w_mul_const(n, 2)
+            ws_sub(nn, n, st_sumn, st_sum)
+            local lim[3], over {
+                w_copy(st_range, lim)
+                w_mul_const(lim, 3)
+                w_ge(n, lim, over)
+                if_nz(over) { w_clear(n) w_copy(lim, n) }
+                clear(over)
+                w_clear(lim)
+            }
+            ; s = |n| * 10000 * 65536 / range
+            local z {
+                w_is_zero(st_range, z)
+                if_z(z) {
+                    w_divmod(n, st_range, s)
+                    w_scale_step(n, st_range, s, 100)
+                    w_scale_step(n, st_range, s, 100)
+                    w_scale_step(n, st_range, s, 256)
+                    w_scale_step(n, st_range, s, 256)
+                }
+                clear(z)
+            }
+            w_clear(n)
+            move(nn, sn)
+            local z { w_is_zero(s, z) if_nz(z) { clear(sn) } clear(z) }
+        }
+        if_nz(st_has) {
+            local dt[3] {
+                ; dt = max(500, now - last), at most 2^36
+                local neg, small {
+                    w_copy(st_now, dt)
+                    w_sub_signed(dt, st_last, neg)
+                    local m[3] { set(m, 500) w_ge(dt, m, small) w_clear(m) }
+                    if_nz(neg) { clear(small) }
+                    if_z(small) { w_clear(dt) set(dt, 500) }
+                    clear(neg)
+                    ge_const(dt + 2, 16, neg)
+                    if_nz(neg) { w_clear(dt) set(dt + 2, 16) }
+                    clear(neg)
+                    clear(small)
+                }
+                ; measured velocity = (s - p) * 250000 / dt   (1/65536 units)
+                local mn, mv[3] {
+                    w_copy(s, mv)
+                    copy(sn, mn)
+                    ws_sub(mn, mv, st_pn, st_p)
+                    local x[3] {
+                        w_copy(mv, x)
+                        w_divmod(x, dt, mv)
+                        w_scale_step(x, dt, mv, 500)
+                        w_scale_step(x, dt, mv, 500)
+                        w_clear(x)
+                    }
+                    ; v' = (3 v + 2 mv) / 5
+                    local un, u[3] {
+                        w_copy(st_v, u)
+                        copy(st_vn, un)
+                        w_mul_const(u, 3)
+                        w_mul_const(mv, 2)
+                        ws_add(un, u, mn, mv)
+                        local k, r { add(k, 5) w_div_cell(u, k, r) clear(r) clear(k) }
+                        local z { w_is_zero(u, z) if_nz(z) { clear(un) } clear(z) }
+                        ; measured acceleration = (v' - v) * 6250 / dt   (1/4096 units)
+                        local an, ma[3] {
+                            w_copy(u, ma)
+                            copy(un, an)
+                            ws_sub(an, ma, st_vn, st_v)
+                            local x[3] {
+                                w_copy(ma, x)
+                                w_divmod(x, dt, ma)
+                                w_scale_step(x, dt, ma, 50)
+                                w_scale_step(x, dt, ma, 125)
+                                w_clear(x)
+                            }
+                            local z { w_is_zero(ma, z) if_nz(z) { clear(an) } clear(z) }
+                            ; a' = (3 a + 2 ma) / 5
+                            w_mul_const(st_a, 3)
+                            w_mul_const(ma, 2)
+                            ws_add(st_an, st_a, an, ma)
+                            local k, r { add(k, 5) w_div_cell(st_a, k, r) clear(r) clear(k) }
+                            local z { w_is_zero(st_a, z) if_nz(z) { clear(st_an) } clear(z) }
+                            clear(an)
+                            w_clear(ma)
+                        }
+                        w_clear(st_v)
+                        clear(st_vn)
+                        w_move_add(u, st_v)
+                        move(un, st_vn)
+                    }
+                    clear(mn)
+                    w_clear(mv)
+                }
+                w_clear(dt)
+            }
+        }
+        set(st_has, 1)
+        w_clear(st_p)
+        clear(st_pn)
+        w_move_add(s, st_p)
+        move(sn, st_pn)
+    }
+    w_clear(st_last)
+    w_copy(st_now, st_last)
+}
+
+; Motion at time st_now into st_o* (sign/magnitude cells).
+macro st_current() {
+    st_round(st_pn, st_p, 8, st_opn, st_op)
+    clear(st_ovn)
+    clear(st_ov)
+    clear(st_oan)
+    clear(st_oa)
+    if_nz(st_has) {
+        local d[3], neg, still {
+            ; still when more than 50 ms passed since the last sample
+            w_copy(st_now, d)
+            w_sub_signed(d, st_last, neg)
+            local m[3] { set(m, 50001) w_norm(m) w_ge(d, m, still) w_clear(m) }
+            if_nz(neg) { clear(still) }
+            if_z(still) {
+                st_round(st_vn, st_v, 8, st_ovn, st_ov)
+                st_round(st_an, st_a, 6, st_oan, st_oa)
+            }
+            w_clear(d)
+            clear(neg)
+            clear(still)
+        }
+    }
+}

@@ -1,0 +1,385 @@
+; ===========================================================================
+; core.bfa - arithmetic, comparison, control and output helpers
+; ===========================================================================
+;
+; Conventions (see MEMORY_MAP.md):
+;  * Every cell is non-negative at rest. A non-wrapping "[-]" cannot clear a
+;    negative cell, so no helper leaves one behind. Signed quantities are kept
+;    as a sign cell (0 or 1) plus a magnitude cell.
+;  * Arguments are absolute cell addresses; the assembler tracks the pointer,
+;    so a helper's exit pointer never matters to its caller.
+;  * "in"  = read and left unchanged, "out" = written (added to unless stated),
+;    "gone" = consumed (left zero). Scratch comes from 'local' cells, which are
+;    zero on entry and must be zero again on exit.
+;  * Loops here are canonical: the VM recognizes several of them (see
+;    src/bridge-transitional/Runtime/BfIdiomLibrary.cs) and runs them in closed
+;    form. Changing one of those loops only costs speed, never correctness.
+
+; x = 0.   x: in >= 0
+macro clear(x) { @x [-] }
+
+; x += k for an assembly-time constant k (either sign); x must stay >= 0.
+macro add(x, k) {
+    if k >= -24 && k <= 24 {
+        if k > 0 { @x +*k }
+        if k < 0 { @x -*(0 - k) }
+    } else {
+        let f = isqrt(abs(k)) {
+            let q = abs(k) / f {
+                local t {
+                    @t +*f
+                    @t [- if k > 0 { @x +*q } else { @x -*q } @t ]
+                    if k > 0 { @x +*(abs(k) - f * q) } else { @x -*(abs(k) - f * q) }
+                }
+            }
+        }
+    }
+}
+
+; x = k.   x: in >= 0
+macro set(x, k) {
+    clear(x)
+    add(x, k)
+}
+
+; b += a; a = 0.   a: gone
+macro move(a, b) { @a [- @b + @a ] }
+
+; b -= a; a = 0.   b must stay >= 0
+macro move_neg(a, b) { @a [- @b - @a ] }
+
+; b += a * k for a small assembly-time constant k >= 0; a = 0.
+macro move_mul(a, b, k) { @a [- @b +*k @a ] }
+
+; b += a.   a: in
+macro copy(a, b) {
+    local t {
+        @a [- @b + @t + @a ]
+        @t [- @a + @t ]
+    }
+}
+
+; b -= a (b must stay >= 0).   a: in
+macro copy_neg(a, b) {
+    local t {
+        @a [- @b - @t + @a ]
+        @t [- @a + @t ]
+    }
+}
+
+; b += a * k for a small assembly-time constant k >= 0.   a: in
+macro copy_mul(a, b, k) {
+    local t {
+        @a [- @b +*k @t + @a ]
+        @t [- @a + @t ]
+    }
+}
+
+; ---------------------------------------------------------------------------
+; Control flow. Tested cells are read, never changed.
+; ---------------------------------------------------------------------------
+
+; Runs then() when x != 0.
+macro if_nz(x, then) {
+    local t {
+        copy(x, t)
+        @t [ then() @t [-] ]
+    }
+}
+
+; Runs then() when x == 0.
+macro if_z(x, then) {
+    local e {
+        @e +
+        if_nz(x) { @e - }
+        @e [ then() @e - ]
+    }
+}
+
+macro if_nz_else(x, then, otherwise) {
+    local t, e {
+        copy(x, t)
+        @e +
+        @t [ then() @e - @t [-] ]
+        @e [ otherwise() @e - ]
+    }
+}
+
+; Runs then() when x == k (assembly-time constant). Works for any x >= 0: the
+; difference x - k may be negative, so it is only ever tested, then restored.
+macro if_eq(x, k, then) {
+    local t, e {
+        copy(x, t)
+        add(t, 0 - k)
+        @e +
+        @t [ add(t, k) @t [-] @e - @t ]
+        @e [ then() @e - ]
+    }
+}
+
+macro if_ne(x, k, then) {
+    local t, e {
+        copy(x, t)
+        add(t, 0 - k)
+        @t [ add(t, k) @t [-] @e + @t ]
+        @e [ then() @e - ]
+    }
+}
+
+macro if_eq_else(x, k, then, otherwise) {
+    local t, e, f {
+        copy(x, t)
+        add(t, 0 - k)
+        @e +
+        @t [ add(t, k) @t [-] @e - @t ]
+        @f +
+        @e [ then() @e - @f - @e ]
+        @f [ otherwise() @f - ]
+    }
+}
+
+; Runs body() while x != 0 (body must eventually clear x).
+macro while_nz(x, body) { @x [ body() @x ] }
+
+; Runs body() x times; x: gone.
+macro times(x, body) { @x [- body() @x ] }
+
+; flag = 1 when a and b are both non-zero (flag: zero on entry)
+macro and_nz(a, b, flag) {
+    if_nz(a) { if_nz(b) { @flag + } }
+}
+
+; ---------------------------------------------------------------------------
+; Comparison
+; ---------------------------------------------------------------------------
+
+; Race: m += min(a, b); a -= min; b -= min.   a, b: in >= 0 (reduced)
+; Recognized by the VM as the idiom "race".
+macro race(a, b, m) {
+    local f, g, s {
+        @a [
+            @b [- @f + @g + @b ]
+            @g [- @b + @g ]
+            @g +
+            @f [ @a - @b - @m + @g - @f [-] ]
+            @g [ @a [- @s + @a ] @g - ]
+        @a ]
+        @s [- @a + @s ]
+    }
+}
+
+; flag += (a >= b).   a, b: in
+macro ge(a, b, flag) {
+    local x, y, m {
+        copy(a, x)
+        copy(b, y)
+        race(x, y, m)
+        clear(m)
+        clear(x)
+        if_z(y) { @flag + }
+        clear(y)
+    }
+}
+
+; flag += (a > b).   a, b: in
+macro gt(a, b, flag) {
+    local x, y, m {
+        copy(a, x)
+        copy(b, y)
+        race(x, y, m)
+        clear(m)
+        clear(y)
+        if_nz(x) { @flag + }
+        clear(x)
+    }
+}
+
+macro lt(a, b, flag) { gt(b, a, flag) }
+
+macro le(a, b, flag) { ge(b, a, flag) }
+
+; flag += (a == b).   a, b: in
+macro eq(a, b, flag) {
+    local x, y, m, z {
+        copy(a, x)
+        copy(b, y)
+        race(x, y, m)
+        clear(m)
+        @z +
+        if_nz(x) { @z [-] }
+        if_nz(y) { @z [-] }
+        move(z, flag)
+        clear(x)
+        clear(y)
+    }
+}
+
+; flag += (a >= k) for an assembly-time constant k.
+macro ge_const(a, k, flag) {
+    local c {
+        add(c, k)
+        ge(a, c, flag)
+        clear(c)
+    }
+}
+
+; flag += (a > k)
+macro gt_const(a, k, flag) {
+    local c {
+        add(c, k)
+        gt(a, c, flag)
+        clear(c)
+    }
+}
+
+; flag += (a < k)
+macro lt_const(a, k, flag) {
+    local c {
+        add(c, k)
+        gt(c, a, flag)
+        clear(c)
+    }
+}
+
+; Runs then() when a > k (assembly-time constant).
+macro if_gt_const(a, k, then) {
+    local over {
+        gt_const(a, k, over)
+        @over [ then() @over - ]
+    }
+}
+
+; Runs then() when a < k.
+macro if_lt_const(a, k, then) {
+    local under {
+        lt_const(a, k, under)
+        @under [ then() @under - ]
+    }
+}
+
+; a = max(a - b, 0).   b: in
+macro sub_sat(a, b) {
+    local y, m {
+        copy(b, y)
+        race(a, y, m)
+        clear(y)
+        clear(m)
+    }
+}
+
+; a = min(a, k) for an assembly-time constant k.
+macro min_const(a, k) {
+    local over {
+        gt_const(a, k, over)
+        @over [- set(a, k) @over ]
+    }
+}
+
+; ---------------------------------------------------------------------------
+; Multiplication and division (all operands >= 0)
+; ---------------------------------------------------------------------------
+
+; p += a * b.   a, b: in.   Recognized as the idiom "multiply".
+macro mul(a, b, p) {
+    local ta, tb {
+        copy(a, ta)
+        @ta [- @b [- @p + @tb + @b ] @tb [- @b + @tb ] @ta ]
+    }
+}
+
+; q += n / d; r = n % d.   n: gone, d: in and > 0 (d = 0 faults the VM),
+; r: zero on entry.   Recognized as the idiom "divmod".
+macro divmod(n, d, q, r) {
+    local c, t, e {
+        copy(d, c)
+        @n [
+            @n - @r + @c -
+            @c [- @t + @e + @c ] @e [- @c + @e ]
+            @e +
+            @t [ @e - @t [-] ]
+            @e [ @q + @r [- @c + @r ] @e - ]
+        @n ]
+        @c [-]
+    }
+}
+
+; divmod by an assembly-time constant k > 0.
+macro divmod_const(n, k, q, r) {
+    assert k > 0, "division by zero"
+    local d {
+        add(d, k)
+        divmod(n, d, q, r)
+        clear(d)
+    }
+}
+
+; q += n / k.   n: gone
+macro div_const(n, k, q) {
+    local r {
+        divmod_const(n, k, q, r)
+        clear(r)
+    }
+}
+
+; ---------------------------------------------------------------------------
+; Input and output
+; ---------------------------------------------------------------------------
+
+; x = next input byte (x's old value is discarded).
+macro get(x) { @x , }
+
+; Writes cell x (0..255).
+macro put(x) { @x . }
+
+; Writes the byte k.
+macro out_const(k) {
+    local t {
+        add(t, k)
+        @t .
+        @t [-]
+    }
+}
+
+; Writes the UTF-8 bytes of an assembly-time string.
+macro out_str(s) {
+    local t {
+        for c, i in s {
+            add(t, c - (i == 0 ? 0 : byte(s, i - 1)))
+            @t .
+        }
+        @t [-]
+    }
+}
+
+; Writes k as u16 little-endian.
+macro out_u16_const(k) {
+    out_const(k % 256)
+    out_const(k / 256 % 256)
+}
+
+; Writes x (0..65535) as u16 little-endian.   x: in
+macro out_u16(x) {
+    local n, hi, lo {
+        copy(x, n)
+        divmod_const(n, 256, hi, lo)
+        @lo . @hi .
+        clear(lo)
+        clear(hi)
+    }
+}
+
+; Writes x (>= 0) as u32 little-endian.   x: in
+macro out_u32(x) {
+    local n, q, b {
+        copy(x, n)
+        divmod_const(n, 256, q, b)
+        @b . clear(b)
+        move(q, n)
+        divmod_const(n, 256, q, b)
+        @b . clear(b)
+        move(q, n)
+        divmod_const(n, 256, q, b)
+        @b . clear(b)
+        @q . clear(q)
+    }
+}

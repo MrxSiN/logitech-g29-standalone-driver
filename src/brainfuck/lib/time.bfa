@@ -1,0 +1,87 @@
+; ===========================================================================
+; time.bfa - monotonic microsecond timestamps as two 24-bit limbs
+; ===========================================================================
+;
+; A timestamp t (below 2^48 us, about 8.9 years) is kept as hi = t / 2^24 and
+; lo = t % 2^24, both comfortably inside a cell.
+
+const LIMB = 16777216
+
+; Reads a u64 little-endian payload field into (hi, lo). Bytes 6 and 7 are
+; ignored (the bridge guarantees t < 2^48).   hi, lo: zero on entry
+macro time_read(hi, lo) {
+    local b {
+        frame_in(b)
+        move(b, lo)
+        frame_in(b)
+        local t {
+            move_mul(b, t, 16)
+            move_mul(t, lo, 16)
+        }
+        frame_in(b)
+        local t {
+            move_mul(b, t, 256)
+            move_mul(t, lo, 256)
+        }
+        frame_in(b)
+        move(b, hi)
+        frame_in(b)
+        local t {
+            move_mul(b, t, 16)
+            move_mul(t, hi, 16)
+        }
+        frame_in(b)
+        local t {
+            move_mul(b, t, 256)
+            move_mul(t, hi, 256)
+        }
+        frame_in(b)
+        clear(b)
+        frame_in(b)
+        clear(b)
+    }
+}
+
+; flag += (now - start >= k) for a constant 0 < k < 2^24. A clock that went
+; backwards counts as no time elapsed.   all inputs: in
+macro time_elapsed_ge(now_hi, now_lo, start_hi, start_lo, k, flag) {
+    assert k > 0 && k < LIMB, "time_elapsed_ge needs 0 < k < 2^24"
+    local t, u, far, next, same, hits {
+        ; now_hi >= start_hi + 2: at least 2^24 us have passed
+        copy(start_hi, t)
+        add(t, 2)
+        ge(now_hi, t, far)
+        clear(t)
+        ; now_hi == start_hi + 1: elapsed = 2^24 + now_lo - start_lo
+        copy(start_hi, t)
+        add(t, 1)
+        eq(now_hi, t, next)
+        clear(t)
+        eq(now_hi, start_hi, same)
+        move(far, hits)
+        if_nz(next) {
+            copy(now_lo, u)
+            add(u, LIMB - k)
+            ge(u, start_lo, hits)
+            clear(u)
+        }
+        if_nz(same) {
+            copy(start_lo, u)
+            add(u, k)
+            ge(now_lo, u, hits)
+            clear(u)
+        }
+        if_nz(hits) { @flag + }
+        clear(hits)
+        clear(next)
+        clear(same)
+    }
+}
+
+; (dst_hi, dst_lo) = (src_hi, src_lo).   dst: cleared first
+macro time_copy(src_hi, src_lo, dst_hi, dst_lo) {
+    clear(dst_hi)
+    clear(dst_lo)
+    copy(src_hi, dst_hi)
+    copy(src_lo, dst_lo)
+}

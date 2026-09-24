@@ -1,0 +1,312 @@
+; ===========================================================================
+; print.bfa - console output frames, numbers and byte buffers
+; ===========================================================================
+;
+; Console text goes out as CMD_CONSOLE_WRITE frames (stream 1 = stdout,
+; 2 = stderr). A line may be several frames; the bridge writes them verbatim.
+;
+; Byte buffers: a buffer B of size S keeps up to S bytes, stored as byte + 1
+; (never zero) in *reverse* order: B+0 holds the newest byte. B-1 must be a
+; permanently zero sentinel and B+S a zero guard, so printing can scan.
+
+; Header of a console frame whose text length is in cell n.   n: in
+macro con_head(stream, n) {
+    local total {
+        copy(n, total)
+        add(total, 3)
+        out_const(0xA5)
+        out_const(1)
+        out_const(0x82)
+        out_const(0)
+        out_const(0)
+        out_const(0)
+        out_u16(total)
+        clear(total)
+    }
+    out_const(stream)
+    out_u16(n)
+}
+
+; Constant text.
+macro con_text(stream, text) {
+    if len(text) > 0 { emit_console(stream, text) }
+}
+
+; x >= 0 in decimal.   x: in
+macro con_dec(stream, x) {
+    local v, n, d[10] {
+        copy(x, v)
+        if_z(v) {
+            set(d, '0')
+            set(n, 1)
+        }
+        while_nz(v) {
+            for j = 1 to 9 { move(d + 9 - j, d + 10 - j) }
+            local q {
+                divmod_const(v, 10, q, d)
+                add(d, '0')
+                move(q, v)
+            }
+            @n +
+        }
+        con_head(stream, n)
+        for j = 0 to 9 {
+            if_nz(d + j) { put(d + j) }
+            clear(d + j)
+        }
+        clear(n)
+    }
+}
+
+; Signed value as sign + magnitude; minimum = the value -2147483648, whose
+; magnitude does not fit in a cell. "-0" prints as "0".
+macro con_signed(stream, negative, magnitude, minimum) {
+    if_nz_else(minimum) {
+        con_text(stream, "-2147483648")
+    } {
+        if_nz(negative) {
+            if_nz(magnitude) { con_text(stream, "-") }
+        }
+        con_dec(stream, magnitude)
+    }
+}
+
+; One hexadecimal digit (0..15) as an upper-case character.   n: in
+macro put_hex_digit(n) {
+    local c, big {
+        copy(n, c)
+        gt_const(c, 9, big)
+        add(c, '0')
+        @big [- add(c, 'A' - '0' - 10) @big ]
+        put(c)
+        clear(c)
+    }
+}
+
+; Two hexadecimal digits of a byte.   b: in
+macro put_hex_byte(b) {
+    local n, hi, lo {
+        copy(b, n)
+        divmod_const(n, 16, hi, lo)
+        put_hex_digit(hi)
+        put_hex_digit(lo)
+        clear(hi)
+        clear(lo)
+    }
+}
+
+; "HHLL" from two bytes (like the .NET format X4 of a u16).
+macro con_hex4(stream, hi, lo) {
+    emit_header(0x82, 7)
+    out_const(stream)
+    out_u16_const(4)
+    put_hex_byte(hi)
+    put_hex_byte(lo)
+}
+
+; "LL" from one byte (X2 of a value below 256).
+macro con_hex2(stream, lo) {
+    emit_header(0x82, 5)
+    out_const(stream)
+    out_u16_const(2)
+    put_hex_byte(lo)
+}
+
+; ---- text to a runtime-selected sink ----
+; Cell 'sink' selects where messages go: 1 stdout, 2 stderr (CMD_CONSOLE_WRITE)
+; or 3 = append to the pending event-log text (CMD_TEXT_APPEND, 0x85), which a
+; later CMD_EVENTLOG_WRITE commits as one entry.
+
+macro sink_head(n) {
+    local total {
+        copy(n, total)
+        if_eq_else(sink, 3) {
+            add(total, 2)
+            out_const(0xA5)
+            out_const(1)
+            out_const(0x85)
+            out_const(0)
+            out_const(0)
+            out_const(0)
+            out_u16(total)
+        } {
+            add(total, 3)
+            out_const(0xA5)
+            out_const(1)
+            out_const(0x82)
+            out_const(0)
+            out_const(0)
+            out_const(0)
+            out_u16(total)
+            put(sink)
+        }
+        clear(total)
+    }
+    out_u16(n)
+}
+
+macro sink_text(text) {
+    if len(text) > 0 {
+        local n {
+            add(n, len(text))
+            sink_head(n)
+            clear(n)
+        }
+        out_str(text)
+    }
+}
+
+macro sink_dec(x) {
+    local v, n, d[10] {
+        copy(x, v)
+        if_z(v) {
+            set(d, '0')
+            set(n, 1)
+        }
+        while_nz(v) {
+            for j = 1 to 9 { move(d + 9 - j, d + 10 - j) }
+            local q {
+                divmod_const(v, 10, q, d)
+                add(d, '0')
+                move(q, v)
+            }
+            @n +
+        }
+        sink_head(n)
+        for j = 0 to 9 {
+            if_nz(d + j) { put(d + j) }
+            clear(d + j)
+        }
+        clear(n)
+    }
+}
+
+macro sink_signed(negative, magnitude, minimum) {
+    if_nz_else(minimum) {
+        sink_text("-2147483648")
+    } {
+        if_nz(negative) {
+            if_nz(magnitude) { sink_text("-") }
+        }
+        sink_dec(magnitude)
+    }
+}
+
+macro sink_buf(b, count) {
+    sink_head(count)
+    put_buf(b)
+}
+
+; ---- buffers ----
+; A buffer is one lane of the interleaved block declared in layout.bfa
+; (BUF_SIZE bytes, BUF_STRIDE cells apart, zero rows before and after).
+
+macro buf_clear(b) {
+    for k = 0 to BUF_SIZE - 1 { clear(b + k * BUF_STRIDE) }
+}
+
+; Adds the byte in x (0..255) as the newest byte. The caller keeps the count and
+; never pushes into a full buffer.   x: in
+macro buf_push(b, x) {
+    for j = 1 to BUF_SIZE - 1 { move(b + (BUF_SIZE - 1 - j) * BUF_STRIDE, b + (BUF_SIZE - j) * BUF_STRIDE) }
+    copy(x, b)
+    @b +
+}
+
+; dst = src (dst cleared first); src unchanged. Uses the scratch lane.
+macro buf_copy(src, dst) {
+    for k = 0 to BUF_SIZE - 1 {
+        let s = src + k * BUF_STRIDE {
+            let d = dst + k * BUF_STRIDE {
+                let t = BUF_TMP + k * BUF_STRIDE {
+                    @d [-]
+                    @s [- @d + @t + @s ]
+                    @t [- @s + @t ]
+                }
+            }
+        }
+    }
+}
+
+; flag += number of rows where buffers a and b differ (0 = equal). Uses the
+; scratch lanes BUF_TMP, BUF_TMP2 and BUF_FLAG, so every step is lane-local.
+macro buf_diff(a, b, flag) {
+    for k = 0 to BUF_SIZE - 1 {
+        let x = a + k * BUF_STRIDE {
+        let y = b + k * BUF_STRIDE {
+        let t = BUF_TMP + k * BUF_STRIDE {
+        let u = BUF_TMP2 + k * BUF_STRIDE {
+        let f = BUF_FLAG + k * BUF_STRIDE {
+            ; t = x - y (may be negative), then test and restore
+            @x [- @t + @u + @x ] @u [- @x + @u ]
+            @y [- @t - @u + @y ] @u [- @y + @u ]
+            @t [ @f + @y [- @t + @u + @y ] @u [- @y + @u ] @t [-] ]
+            if k < BUF_SIZE - 1 {
+                @f [- @(f + BUF_STRIDE) + @f ]
+            } else {
+                move(f, flag)
+            }
+        }
+        }
+        }
+        }
+        }
+    }
+}
+
+; Relative pointer move by d cells (usable where the pointer is not known).
+macro rel(d) {
+    if d > 0 { >*d }
+    if d < 0 { <*(0 - d) }
+}
+
+; Like put_buf, but skips the oldest 'skip' bytes (the buffer must hold at
+; least that many) and prints byte "into" wherever the buffer holds byte "from"
+; (from = 0: no replacement). Works lane-locally with the scratch lanes, using
+; relative moves because the pointer position inside the scan is not known.
+macro put_buf_map_skip(b, skip, from, into) {
+    let lane = b - BUF_BASE {
+    let dt = BUF_TMP - BUF_BASE - lane {
+    let du = BUF_TMP2 - BUF_BASE - lane {
+    let df = BUF_FLAG - BUF_BASE - lane {
+        @b [! >*BUF_STRIDE ]
+        <*(BUF_STRIDE * (1 + skip))
+        if from == 0 {
+            [! - . + <*BUF_STRIDE ]
+        } else {
+            [!
+                ; t = the byte (cell holds byte + 1), copied through u
+                [- rel(dt) + rel(du - dt) + rel(0 - du) ]
+                rel(du) [- rel(0 - du) + rel(du) ] rel(0 - du)
+                rel(dt) - -*from
+                ; t = byte - from: print the byte when it differs, else 'to'
+                rel(df - dt) + rel(dt - df)
+                [ +*from . [-] rel(df - dt) - rel(dt - df) ]
+                rel(df - dt)
+                [ - +*into . [-] ]
+                rel(0 - df)
+                <*BUF_STRIDE
+            ]
+        }
+        assume @(b - BUF_STRIDE)
+    }
+    }
+    }
+    }
+}
+
+macro put_buf_map(b, from, into) { put_buf_map_skip(b, 0, from, into) }
+
+; Writes the buffer's bytes oldest first (no frame header).
+macro put_buf(b) {
+    @b [! >*BUF_STRIDE ]
+    <*BUF_STRIDE
+    [! - . + <*BUF_STRIDE ]
+    assume @(b - BUF_STRIDE)
+}
+
+; Console frame with the buffer's text; count (cell) = number of bytes held.
+macro con_buf(stream, b, count) {
+    con_head(stream, count)
+    put_buf(b)
+}

@@ -1,0 +1,339 @@
+# WheelController transcripts against scripted fake HID discovery.
+# Frozen from the legacy C# implementation by tools/G29.Reference (reference.ps1).
+# Do not edit by hand. These vectors are the oracle for the Brainfuck port.
+# scenario <name>; phases list the configurable (g29) and PS4-mode devices per re-enumeration step
+# call <operation>; then the observed discovery events and 'result ok <path>' or 'result error <message>'
+# native paths n*, compatibility paths c* (PID C294 rev 1350, 7-byte output), PS4 paths p* (PID C260)
+
+scenario init-native-540-0
+enumerate g29
+open n1
+send n1 F8811C02000000
+close n1
+open n1
+send n1 F5000000000000
+close n1
+open n1
+send n1 F8120000000000
+close n1
+result ok n1
+
+scenario init-native-900-67
+enumerate g29
+open n1
+send n1 F8818403000000
+close n1
+open n1
+send n1 FE0D0606810000
+send n1 14000000000000
+close n1
+open n1
+send n1 F8120000000000
+close n1
+result ok n1
+
+scenario init-native-40-100
+enumerate g29
+open n1
+send n1 F8812800000000
+close n1
+open n1
+send n1 FE0D0707FF0000
+send n1 14000000000000
+close n1
+open n1
+send n1 F8120000000000
+close n1
+result ok n1
+
+scenario init-compatibility-switches-to-native
+enumerate g29
+open c1
+send c1 F80A0000000000
+send c1 F8090501010000
+close c1
+enumerate g29
+open n2
+send n2 F8818403000000
+close n2
+open n2
+send n2 F5000000000000
+close n2
+open n2
+send n2 F8120000000000
+close n2
+result ok n2
+
+scenario init-compatibility-native-appears-beside-old
+enumerate g29
+open c1
+send c1 F80A0000000000
+send c1 F8090501010000
+close c1
+enumerate g29
+open n2
+send n2 F881D002000000
+close n2
+open n2
+send n2 FE0D0202300000
+send n2 14000000000000
+close n2
+open n2
+send n2 F8120000000000
+close n2
+result ok n2
+
+scenario init-compatibility-never-returns (8 s real timeout, enumerations not logged)
+open c1
+send c1 F80A0000000000
+send c1 F8090501010000
+close c1
+result error The G29 did not reconnect in native mode. Reconnect USB and run init again.
+
+scenario init-none
+enumerate g29
+enumerate ps4
+result error No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+
+scenario init-ps4
+enumerate g29
+enumerate ps4
+result error The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+
+scenario init-multiple
+enumerate g29
+result error More than one G29 was found. Leave only the target wheel connected.
+
+scenario init-multiple-with-ps4
+enumerate g29
+result error More than one G29 was found. Leave only the target wheel connected.
+
+scenario init-g29-and-ps4
+enumerate g29
+open n1
+send n1 F8818403000000
+close n1
+open n1
+send n1 F5000000000000
+close n1
+open n1
+send n1 F8120000000000
+close n1
+result ok n1
+
+scenario init-open-fails
+enumerate g29
+open n1
+open-failed n1
+result error Unable to open the G29 HID interface for output. Close any program holding exclusive access and try again.
+
+scenario init-send-fails
+enumerate g29
+open n1
+send n1 F8818403000000
+send-failed n1
+close n1
+result error The G29 rejected an output report.
+
+scenario init-range-39
+enumerate g29
+result error Value must be between 40 and 900.\r\nParameter name: degrees\r\nActual value was 39.
+
+scenario init-autocenter-101
+enumerate g29
+open n1
+send n1 F8818403000000
+close n1
+result error Value must be between 0 and 100.\r\nParameter name: percent\r\nActual value was 101.
+
+scenario range-39
+enumerate g29
+result error Value must be between 40 and 900.\r\nParameter name: degrees\r\nActual value was 39.
+
+scenario range-40
+enumerate g29
+open n1
+send n1 F8812800000000
+close n1
+result ok
+
+scenario range-541
+enumerate g29
+open n1
+send n1 F8811D02000000
+close n1
+result ok
+
+scenario range-900
+enumerate g29
+open n1
+send n1 F8818403000000
+close n1
+result ok
+
+scenario range-901
+enumerate g29
+result error Value must be between 40 and 900.\r\nParameter name: degrees\r\nActual value was 901.
+
+scenario autocenter--1
+enumerate g29
+result error Value must be between 0 and 100.\r\nParameter name: percent\r\nActual value was -1.
+
+scenario autocenter-0
+enumerate g29
+open n1
+send n1 F5000000000000
+close n1
+result ok
+
+scenario autocenter-1
+enumerate g29
+open n1
+send n1 FE0D0000010000
+send n1 14000000000000
+close n1
+result ok
+
+scenario autocenter-66
+enumerate g29
+open n1
+send n1 FE0D05057E0000
+send n1 14000000000000
+close n1
+result ok
+
+scenario autocenter-67
+enumerate g29
+open n1
+send n1 FE0D0606810000
+send n1 14000000000000
+close n1
+result ok
+
+scenario autocenter-100
+enumerate g29
+open n1
+send n1 FE0D0707FF0000
+send n1 14000000000000
+close n1
+result ok
+
+scenario autocenter-101
+enumerate g29
+result error Value must be between 0 and 100.\r\nParameter name: percent\r\nActual value was 101.
+
+scenario leds--1
+enumerate g29
+result error Value must be between 0 and 31.\r\nParameter name: mask\r\nActual value was -1.
+
+scenario leds-0
+enumerate g29
+open n1
+send n1 F8120000000000
+close n1
+result ok
+
+scenario leds-21
+enumerate g29
+open n1
+send n1 F8121500000000
+close n1
+result ok
+
+scenario leds-31
+enumerate g29
+open n1
+send n1 F8121F00000000
+close n1
+result ok
+
+scenario leds-32
+enumerate g29
+result error Value must be between 0 and 31.\r\nParameter name: mask\r\nActual value was 32.
+
+scenario force--101
+enumerate g29
+result error Value must be between -100 and 100.\r\nParameter name: percent\r\nActual value was -101.
+
+scenario force--100
+enumerate g29
+open n1
+send n1 11080180000000
+close n1
+result ok
+
+scenario force--25
+enumerate g29
+open n1
+send n1 11086080000000
+close n1
+result ok
+
+scenario force-0
+enumerate g29
+open n1
+send n1 13000000000000
+close n1
+result ok
+
+scenario force-1
+enumerate g29
+open n1
+send n1 11088180000000
+close n1
+result ok
+
+scenario force-25
+enumerate g29
+open n1
+send n1 1108A080000000
+close n1
+result ok
+
+scenario force-100
+enumerate g29
+open n1
+send n1 1108FF80000000
+close n1
+result ok
+
+scenario force-101
+enumerate g29
+result error Value must be between -100 and 100.\r\nParameter name: percent\r\nActual value was 101.
+
+scenario stop
+enumerate g29
+open n1
+send n1 13000000000000
+close n1
+result ok
+
+scenario range-on-compatibility
+enumerate g29
+result error The G29 is in compatibility mode. Run 'g29ctl init' first.
+
+scenario stop-on-compatibility
+enumerate g29
+result error The G29 is in compatibility mode. Run 'g29ctl init' first.
+
+scenario stop-none
+enumerate g29
+enumerate ps4
+result error No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+
+scenario stop-ps4
+enumerate g29
+enumerate ps4
+result error The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+
+scenario leds-multiple
+enumerate g29
+result error More than one G29 was found. Leave only the target wheel connected.
+
+scenario find-devices
+enumerate g29
+result ok
+
+scenario ps4-connected
+enumerate ps4
+result ok

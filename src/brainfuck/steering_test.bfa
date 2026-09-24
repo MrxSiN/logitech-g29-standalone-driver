@@ -1,0 +1,69 @@
+; ===========================================================================
+; steering_test.bfa - role TEST entry points for the steering motion
+; ===========================================================================
+;
+; EV_TEST 'W' + operation replays tests/reference/steering.txt:
+;
+;   x min (sign u8 + u32), max (sign u8 + u32), bit size u16
+;       new reader -> status, effective min (sign u8 + u32), effective max
+;   s now u64, raw u32     one input report -> status
+;   m now u64              motion -> status, position, velocity, acceleration
+;                          (sign u8 + u32 each)
+
+macro test_steering() {
+    frame_in(tw_op)
+    if_eq(tw_op, 'x') {
+        frame_in(st_minn)
+        w_read_u32(st_min)
+        frame_in(st_maxn)
+        w_read_u32(st_max)
+        clear(st_bits)
+        frame_in_u16(st_bits)
+        set(st_req, 1)
+    }
+    if_eq(tw_op, 's') {
+        w_read_u64(st_now)
+        w_read_u32(st_raw)
+        set(st_req, 2)
+    }
+    if_eq(tw_op, 'm') {
+        w_read_u64(st_now)
+        set(st_req, 3)
+    }
+    frame_skip()
+    set(svc, K_TEST_W)
+}
+
+; Continuation after the steering service ran.
+macro test_steering_done() {
+    local op {
+        copy(tw_op, op)
+        clear(tw_op)
+        if_eq(op, 'x') {
+            emit_reply_header(0x8F, 11)
+            out_const(0)
+            put(st_minn)
+            w_out_u32(st_min)
+            put(st_maxn)
+            w_out_u32(st_max)
+        }
+        if_eq(op, 's') {
+            emit_reply_header(0x8F, 1)
+            out_const(0)
+        }
+        if_eq(op, 'm') {
+            emit_reply_header(0x8F, 16)
+            out_const(0)
+            put(st_opn)
+            out_u32(st_op)
+            put(st_ovn)
+            out_u32(st_ov)
+            put(st_oan)
+            out_u32(st_oa)
+        }
+        clear(op)
+    }
+    w_clear(st_now)
+    w_clear(st_raw)
+    clear(st_bits)
+}

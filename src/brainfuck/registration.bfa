@@ -1,0 +1,579 @@
+; ===========================================================================
+; registration.bfa - g29ctl doctor, ffb-register and ffb-unregister
+; ===========================================================================
+;
+; The DirectInput registration policy (legacy DirectInputDriverRegistrar and
+; HostDiagnostics), expressed as generic registry, file, process and host-info
+; requests (ABI.md). The bridge knows none of these paths, values or rules.
+;
+; Registration: the COM class in the 64-bit and 32-bit registry views, served
+; by the native in-process DLL of that bitness (g29ffb64.dll, g29ffb32.dll, next
+; to g29ctl.exe; any older registration of the class is replaced); then,
+; in HKLM (64-bit view) and in the current user's HKCU, the OEMForceFeedback
+; registration for VID_046D&PID_C24F. Ownership markers live in
+; Software\G29Standalone\DirectInput of the same root, never in the OEM key
+; (DirectInput copies OEM keys between hives). A registration whose class is
+; still installed and is not ours stops the command. Unregistration removes
+; exactly what the markers say this project created.
+;
+; The requests run as numbered steps: state RS_EXEC emits step reg_step, state
+; RS_WAIT parses the answer and runs the step's follow-up, which normally moves
+; on to the next step (or chooses another).
+
+const R_HKLM = 1
+const R_HKCU = 2
+const V_DEFAULT = 0
+const V_64 = 1
+const V_32 = 2
+
+const CLSID_TEXT = "{D252A2D4-A917-47D3-BD1B-F5A0138CFE12}"
+const CLASS_KEY = "SOFTWARE\\Classes\\CLSID\\{D252A2D4-A917-47D3-BD1B-F5A0138CFE12}"
+const SERVER_KEY = "SOFTWARE\\Classes\\CLSID\\{D252A2D4-A917-47D3-BD1B-F5A0138CFE12}\\InprocServer32"
+const OEM_KEY = "System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_046D&PID_C24F"
+const FF_KEY = "System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_046D&PID_C24F\\OEMForceFeedback"
+const AXIS_KEY = "System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_046D&PID_C24F\\Axes\\0"
+const AXES_KEY = "System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_046D&PID_C24F\\Axes"
+const EFFECTS_KEY = "System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_046D&PID_C24F\\OEMForceFeedback\\Effects\\"
+const MARKER_KEY = "Software\\G29Standalone\\DirectInput"
+const PRODUCT_KEY = "Software\\G29Standalone"
+const CLSID_PREFIX = "SOFTWARE\\Classes\\CLSID\\"
+const SERVER_SUFFIX = "\\InprocServer32"
+
+; DIFFDEVICEATTRIBUTES: flags 0, sample period 1000 us, minimum time resolution 1000 us.
+const DEVICE_ATTRIBUTES = "00000000E8030000E8030000"
+; DIOBJECTATTRIBUTES flags: DIDOI_FFACTUATOR | DIDOI_ASPECTPOSITION | DIDOI_POLLED.
+const AXIS_ATTRIBUTES = "01810000"
+; DIFFOBJECTATTRIBUTES: max force 10, force resolution 256.
+const AXIS_FF_ATTRIBUTES = "0A00000000010000"
+
+; buffers used by these commands (lanes of the text-buffer block)
+const DLL_BUF = a0_buf
+const ASM_BUF = off_buf
+const VER_BUF = sel_buf
+const FOREIGN_BUF = nat_buf
+; doctor
+const CLSID_BUF = sel_buf
+const LIB64_BUF = nat_buf
+const CB64_BUF = a0_buf
+const LIB32_BUF = off_buf
+const CB32_BUF = cfg_path
+
+; states
+const RS_EXEC = 140
+const RS_WAIT = 141
+const FR_1 = 150
+const FR_2 = 151
+const FR_3 = 152
+const FR_DONE = 153
+const FR_4 = 154
+const FU_1 = 160
+const FU_DONE = 161
+const DR_1 = 170
+const DR_2 = 171
+const DR_P = 172
+const DR_PB = 173
+const DR_PL = 174
+const DR_PEND = 175
+const DR_R = 176
+const DR_OUT = 177
+
+const M_REGISTRY = 20
+const M_FFB_MISSING = 21
+const M_FOREIGN = 22
+
+const OP_READ = 0xB0
+const OP_WRITE = 0xB1
+const OP_CREATE = 0xB2
+const OP_DELETE_TREE = 0xB3
+const OP_INFO = 0xB4
+const OP_DELETE_KEY = 0xB5
+
+; ---------------------------------------------------------------------------
+; Request frames
+; ---------------------------------------------------------------------------
+
+; Frame header with a payload length of n_static plus the runtime lengths in
+; the cells a and b (-1 = none).
+macro head_dyn(type, n_static, a, b) {
+    local n {
+        add(n, n_static)
+        if a >= 0 { copy(a, n) }
+        if b >= 0 { copy(b, n) }
+        out_const(0xA5)
+        out_const(1)
+        out_const(type)
+        out_const(0)
+        out_const(0)
+        out_const(0)
+        out_u16(n)
+        clear(n)
+    }
+}
+
+macro text_const(s) {
+    out_u16_const(len(s))
+    out_str(s)
+}
+
+; Text made of a constant, a buffer (optionally with one byte replaced while
+; printing) and a constant; count holds the buffer's length.
+macro text_parts(pre, b, count, post, from, into) {
+    local n {
+        add(n, len(pre) + len(post))
+        copy(count, n)
+        out_u16(n)
+        clear(n)
+    }
+    if len(pre) > 0 { out_str(pre) }
+    put_buf_map(b, from, into)
+    if len(post) > 0 { out_str(post) }
+}
+
+; Constant hexadecimal text as bytes.
+macro out_hex(h) {
+    for i = 0 to len(h) / 2 - 1 {
+        let hi = byte(h, 2 * i) {
+            let lo = byte(h, 2 * i + 1) {
+                out_const((hi >= 'A' ? hi - 55 : hi - 48) * 16 + (lo >= 'A' ? lo - 55 : lo - 48))
+            }
+        }
+    }
+}
+
+macro req_path(op, root, view, path) {
+    set(rq_op, op)
+    emit_header(op, 2 + 2 + len(path))
+    out_const(root)
+    out_const(view)
+    text_const(path)
+}
+
+macro req_read(root, view, path, name) {
+    set(rq_op, OP_READ)
+    emit_header(OP_READ, 2 + 2 + len(path) + 2 + len(name))
+    out_const(root)
+    out_const(view)
+    text_const(path)
+    text_const(name)
+}
+
+; read/key-info of CLSID_PREFIX + buffer + SERVER_SUFFIX
+macro req_class_server(op, root, view, b, count, name) {
+    set(rq_op, op)
+    head_dyn(op, 2 + 2 + len(CLSID_PREFIX) + len(SERVER_SUFFIX) + (op == OP_READ ? 2 + len(name) : 0), count, -1)
+    out_const(root)
+    out_const(view)
+    text_parts(CLSID_PREFIX, b, count, SERVER_SUFFIX, 0, 0)
+    if op == OP_READ { text_const(name) }
+}
+
+macro req_set_sz(root, view, path, name, value) {
+    set(rq_op, OP_WRITE)
+    emit_header(OP_WRITE, 2 + 2 + len(path) + 2 + len(name) + 1 + 2 + len(value))
+    out_const(root)
+    out_const(view)
+    text_const(path)
+    text_const(name)
+    out_const(1)
+    text_const(value)
+}
+
+macro req_set_dword(root, view, path, name, value) {
+    set(rq_op, OP_WRITE)
+    emit_header(OP_WRITE, 2 + 2 + len(path) + 2 + len(name) + 1 + 4)
+    out_const(root)
+    out_const(view)
+    text_const(path)
+    text_const(name)
+    out_const(2)
+    out_const(value)
+    out_const(0)
+    out_const(0)
+    out_const(0)
+}
+
+macro req_set_bin(root, view, path, name, h) {
+    set(rq_op, OP_WRITE)
+    emit_header(OP_WRITE, 2 + 2 + len(path) + 2 + len(name) + 1 + 2 + len(h) / 2)
+    out_const(root)
+    out_const(view)
+    text_const(path)
+    text_const(name)
+    out_const(3)
+    out_u16_const(len(h) / 2)
+    out_hex(h)
+}
+
+; String value pre + buffer (with from -> to while printing).
+macro req_set_sz_buf(root, view, path, name, pre, b, count, from, into) {
+    set(rq_op, OP_WRITE)
+    head_dyn(OP_WRITE, 2 + 2 + len(path) + 2 + len(name) + 1 + 2 + len(pre), count, -1)
+    out_const(root)
+    out_const(view)
+    text_const(path)
+    text_const(name)
+    out_const(1)
+    text_parts(pre, b, count, "", from, into)
+}
+
+; ---------------------------------------------------------------------------
+; Answers
+; ---------------------------------------------------------------------------
+
+; u32 little-endian into a cell (values up to 2^31 - 1; larger values keep only
+; their low 31 bits, which only matters for error numbers).
+macro read_u32(x) {
+    clear(x)
+    local b, t {
+        frame_in(b)
+        move(b, x)
+        frame_in(b)
+        move_mul(b, t, 16)
+        move_mul(t, x, 16)
+        frame_in(b)
+        move_mul(b, t, 256)
+        move_mul(t, x, 256)
+        frame_in(b)
+        local high {
+            gt_const(b, 127, high)
+            if_nz(high) { add(b, -128) }
+            clear(high)
+        }
+        move_mul(b, t, 256)
+        local u {
+            move_mul(t, u, 256)
+            move_mul(u, x, 256)
+        }
+    }
+}
+
+; EV_REG_RESULT for the request rq_op.
+macro parse_reg_result() {
+    read_u32(rq_status)
+    clear(rq_kind)
+    clear(rq_len)
+    clear(rq_existed)
+    clear(rq_subkeys)
+    clear(rq_values)
+    if_eq(rq_op, OP_READ) {
+        frame_in(rq_kind)
+        if_eq(rq_kind, 1) { dev_text(rq_kind, cur_buf, rq_len, 0) }
+    }
+    if_eq(rq_op, OP_CREATE) { frame_in(rq_existed) }
+    if_eq(rq_op, OP_INFO) {
+        read_u32(rq_subkeys)
+        read_u32(rq_values)
+    }
+    frame_skip()
+}
+
+; Is the string just read (cur_buf, rq_len) our class ID, ignoring case?
+macro if_our_clsid(then) {
+    local ok, c {
+        if_eq(rq_len, len(CLSID_TEXT)) {
+            set(ok, 1)
+            for i = 0 to len(CLSID_TEXT) - 1 {
+                ; cur_buf keeps the newest byte first, stored as byte + 1
+                let src = cur_buf + i * BUF_STRIDE {
+                    let want = byte(CLSID_TEXT, len(CLSID_TEXT) - 1 - i) {
+                        clear(c)
+                        copy(src, c)
+                        @c -
+                        lower_ascii(c)
+                        if_ne(c, want >= 'A' && want <= 'Z' ? want + 32 : want) { clear(ok) }
+                    }
+                }
+            }
+        }
+        if_nz(ok) { then() }
+        clear(ok)
+        clear(c)
+    }
+}
+
+macro lower_ascii(c) {
+    local u {
+        ge_const(c, 'A', u)
+        gt_const(c, 'Z', u)
+        if_eq(u, 1) { add(c, 32) }
+        clear(u)
+    }
+}
+
+; ---------------------------------------------------------------------------
+; Registration steps
+; ---------------------------------------------------------------------------
+
+; One step: in the emit pass (final = 0) it sends its request; in the follow-up
+; pass (final = 1) it runs after the answer, with reg_step already advanced.
+macro rstep(final, k, request, after) {
+    if final {
+        if_eq(rs_cur, k) { after() }
+    } else {
+        if_eq(reg_step, k) { request() }
+    }
+}
+
+; The DLL of each view: the directory in DLL_BUF plus this name.
+const DLL_64 = "g29ffb64.dll"
+const DLL_32 = "g29ffb32.dll"
+
+; String value: buffer + constant suffix.
+macro req_set_sz_path(root, view, path, name, b, count, post) {
+    set(rq_op, OP_WRITE)
+    head_dyn(OP_WRITE, 2 + 2 + len(path) + 2 + len(name) + 1 + 2 + len(post), count, -1)
+    out_const(root)
+    out_const(view)
+    text_const(path)
+    text_const(name)
+    out_const(1)
+    text_parts("", b, count, post, 0, 0)
+}
+
+macro class_steps(final, base, view, dll) {
+    ; an older registration of the class (for example the .NET driver's) goes first
+    rstep(final, base + 0, { req_path(OP_DELETE_TREE, R_HKLM, view, CLASS_KEY) }, { })
+    rstep(final, base + 1, { req_set_sz(R_HKLM, view, CLASS_KEY, "", "G29Standalone DirectInput force feedback driver") }, { })
+    rstep(final, base + 2, { req_set_sz_path(R_HKLM, view, SERVER_KEY, "", DLL_BUF, dll_len, dll) }, { })
+    rstep(final, base + 3, { req_set_sz(R_HKLM, view, SERVER_KEY, "ThreadingModel", "Both") }, { })
+}
+
+macro effect_steps(final, k, root, view, guid, name, attributes) {
+    rstep(final, k, { req_set_sz(root, view, EFFECTS_KEY + guid, "", name) }, { })
+    rstep(final, k + 1, { req_set_bin(root, view, EFFECTS_KEY + guid, "Attributes", attributes) }, { })
+}
+
+; DIEFFECTATTRIBUTES: effect id, type, static params, dynamic params, coordinates.
+macro oem_steps(final, base, root, view) {
+    rstep(final, base + 0, { req_path(OP_CREATE, root, view, MARKER_KEY) }, { })
+    rstep(final, base + 1, { req_path(OP_INFO, root, view, OEM_KEY) }, {
+        ; the OEM key exists: no key of ours to create
+        if_z(rq_status) { set(reg_step, base + 4) }
+    })
+    rstep(final, base + 2, { req_path(OP_CREATE, root, view, OEM_KEY) }, { })
+    rstep(final, base + 3, { req_set_dword(root, view, MARKER_KEY, "CreatedOemKey", 1) }, { })
+    rstep(final, base + 4, { req_read(root, view, FF_KEY, "CLSID") }, {
+        ; a foreign class ID: refuse when its class is still installed
+        set(reg_step, base + 7)
+        if_eq(rq_kind, 1) {
+            local ours {
+                if_our_clsid() { set(ours, 1) }
+                if_z(ours) {
+                    buf_copy(cur_buf, FOREIGN_BUF)
+                    clear(foreign_len)
+                    copy(rq_len, foreign_len)
+                    set(reg_step, base + 5)
+                }
+                clear(ours)
+            }
+        }
+    })
+    rstep(final, base + 5, { req_class_server(OP_INFO, R_HKLM, V_64, FOREIGN_BUF, foreign_len, "") }, {
+        if_z(rq_status) {
+            set(err + E_NUM, root)
+            fail(M_FOREIGN)
+        }
+    })
+    rstep(final, base + 6, { req_class_server(OP_INFO, R_HKLM, V_32, FOREIGN_BUF, foreign_len, "") }, {
+        if_z(rq_status) {
+            set(err + E_NUM, root)
+            fail(M_FOREIGN)
+        }
+    })
+    rstep(final, base + 7, { req_path(OP_INFO, root, view, AXIS_KEY) }, {
+        if_z(rq_status) { set(reg_step, base + 12) }
+    })
+    rstep(final, base + 8, { req_set_sz(root, view, AXIS_KEY, "", "Wheel axis") }, { })
+    rstep(final, base + 9, { req_set_bin(root, view, AXIS_KEY, "Attributes", AXIS_ATTRIBUTES) }, { })
+    rstep(final, base + 10, { req_set_bin(root, view, AXIS_KEY, "FFAttributes", AXIS_FF_ATTRIBUTES) }, { })
+    rstep(final, base + 11, { req_set_dword(root, view, MARKER_KEY, "CreatedSteeringAxis", 1) }, { })
+    ; a registration whose driver is no longer installed is replaced
+    rstep(final, base + 12, { req_path(OP_DELETE_TREE, root, view, FF_KEY) }, { })
+    rstep(final, base + 13, { req_set_sz(root, view, FF_KEY, "CLSID", CLSID_TEXT) }, { })
+    rstep(final, base + 14, { req_set_bin(root, view, FF_KEY, "Attributes", DEVICE_ATTRIBUTES) }, { })
+    effect_steps(final, base + 15, root, view, "{13541C20-8E33-11D0-9AD0-00A0C9A06E35}", "Constant", "0100000001860000ED030000ED03000030000000")
+    effect_steps(final, base + 17, root, view, "{13541C21-8E33-11D0-9AD0-00A0C9A06E35}", "Ramp Force", "0200000002860000EF030000EF03000030000000")
+    effect_steps(final, base + 19, root, view, "{13541C22-8E33-11D0-9AD0-00A0C9A06E35}", "Square Wave", "0300000003860000EF030000EF03000030000000")
+    effect_steps(final, base + 21, root, view, "{13541C23-8E33-11D0-9AD0-00A0C9A06E35}", "Sine Wave", "0400000003860000EF030000EF03000030000000")
+    effect_steps(final, base + 23, root, view, "{13541C24-8E33-11D0-9AD0-00A0C9A06E35}", "Triangle Wave", "0500000003860000EF030000EF03000030000000")
+    effect_steps(final, base + 25, root, view, "{13541C25-8E33-11D0-9AD0-00A0C9A06E35}", "Sawtooth Up Wave", "0600000003860000EF030000EF03000030000000")
+    effect_steps(final, base + 27, root, view, "{13541C26-8E33-11D0-9AD0-00A0C9A06E35}", "Sawtooth Down Wave", "0700000003860000EF030000EF03000030000000")
+    effect_steps(final, base + 29, root, view, "{13541C27-8E33-11D0-9AD0-00A0C9A06E35}", "Spring", "0800000004D800006D0300006D03000030000000")
+    effect_steps(final, base + 31, root, view, "{13541C28-8E33-11D0-9AD0-00A0C9A06E35}", "Damper", "0900000004D800006D0300006D03000030000000")
+    effect_steps(final, base + 33, root, view, "{13541C29-8E33-11D0-9AD0-00A0C9A06E35}", "Inertia", "0A00000004D800006D0300006D03000030000000")
+    effect_steps(final, base + 35, root, view, "{13541C2A-8E33-11D0-9AD0-00A0C9A06E35}", "Friction", "0B00000004D800006D0300006D03000030000000")
+}
+
+const REG_CLASS_64 = 1
+const REG_CLASS_32 = 13
+const REG_OEM_HKLM = 30
+const REG_OEM_HKCU = 70
+const REG_END = 110
+
+macro register_steps(final) {
+    class_steps(final, REG_CLASS_64, V_64, DLL_64)
+    class_steps(final, REG_CLASS_32, V_32, DLL_32)
+    oem_steps(final, REG_OEM_HKLM, R_HKLM, V_64)
+    oem_steps(final, REG_OEM_HKCU, R_HKCU, V_DEFAULT)
+}
+
+macro unregister_root_steps(final, base, root, view) {
+    rstep(final, base + 0, { req_read(root, view, MARKER_KEY, "CreatedOemKey") }, {
+        clear(created_oem)
+        if_z(rq_status) { set(created_oem, 1) }
+    })
+    rstep(final, base + 1, { req_read(root, view, MARKER_KEY, "CreatedSteeringAxis") }, {
+        clear(created_axis)
+        if_z(rq_status) { set(created_axis, 1) }
+        if_z(created_oem) { set(reg_step, base + 3) }
+    })
+    ; a key we created: everything else in it is DirectInput's own cache
+    rstep(final, base + 2, { req_path(OP_DELETE_TREE, root, view, OEM_KEY) }, { set(reg_step, base + 8) })
+    rstep(final, base + 3, { req_read(root, view, FF_KEY, "CLSID") }, {
+        set(reg_step, base + 8)
+        if_eq(rq_kind, 1) { if_our_clsid() { set(reg_step, base + 4) } }
+    })
+    rstep(final, base + 4, { req_path(OP_DELETE_TREE, root, view, FF_KEY) }, {
+        if_z(created_axis) { set(reg_step, base + 8) }
+    })
+    rstep(final, base + 5, { req_path(OP_DELETE_TREE, root, view, AXIS_KEY) }, { })
+    rstep(final, base + 6, { req_path(OP_INFO, root, view, AXES_KEY) }, {
+        set(reg_step, base + 8)
+        if_z(rq_status) { if_z(rq_subkeys) { if_z(rq_values) { set(reg_step, base + 7) } } }
+    })
+    rstep(final, base + 7, { req_path(OP_DELETE_KEY, root, view, AXES_KEY) }, { })
+    rstep(final, base + 8, { req_path(OP_DELETE_TREE, root, view, MARKER_KEY) }, { })
+    rstep(final, base + 9, { req_path(OP_INFO, root, view, PRODUCT_KEY) }, {
+        set(reg_step, base + 11)
+        if_z(rq_status) { if_z(rq_subkeys) { if_z(rq_values) { set(reg_step, base + 10) } } }
+    })
+    rstep(final, base + 10, { req_path(OP_DELETE_KEY, root, view, PRODUCT_KEY) }, { })
+}
+
+const UNREG_HKLM = 1
+const UNREG_HKCU = 12
+const UNREG_CLASS = 23
+const UNREG_END = 25
+
+macro unregister_steps(final) {
+    unregister_root_steps(final, UNREG_HKLM, R_HKLM, V_64)
+    unregister_root_steps(final, UNREG_HKCU, R_HKCU, V_DEFAULT)
+    rstep(final, UNREG_CLASS, { req_path(OP_DELETE_TREE, R_HKLM, V_64, CLASS_KEY) }, { })
+    rstep(final, UNREG_CLASS + 1, { req_path(OP_DELETE_TREE, R_HKLM, V_32, CLASS_KEY) }, { })
+}
+
+; ---------------------------------------------------------------------------
+; States
+; ---------------------------------------------------------------------------
+
+macro st_registration() {
+    ; ---- ffb-register ----
+    if_eq(cli_cur, FR_1) {
+        emit_header(0x86, 0)
+        await_state(FR_2)
+    }
+    if_eq(cli_cur, FR_2) {
+        if_eq(fr_type, 0x06) {
+            ; the drivers live next to g29ctl.exe
+            local keep {
+                set(keep, 1)
+                dev_text(keep, DLL_BUF, dll_len, 0)
+                clear(keep)
+            }
+            consumed()
+            head_dyn(0xB6, 2 + len(DLL_64), dll_len, -1)
+            text_parts("", DLL_BUF, dll_len, DLL_64, 0, 0)
+            await_state(FR_3)
+        }
+    }
+    if_eq(cli_cur, FR_3) {
+        if_eq(fr_type, 0x32) {
+            read_u32(rq_status)
+            consumed()
+            if_nz_else(rq_status) { fail(M_FFB_MISSING) } {
+                head_dyn(0xB6, 2 + len(DLL_32), dll_len, -1)
+                text_parts("", DLL_BUF, dll_len, DLL_32, 0, 0)
+                await_state(FR_4)
+            }
+        }
+    }
+    if_eq(cli_cur, FR_4) {
+        if_eq(fr_type, 0x32) {
+            read_u32(rq_status)
+            consumed()
+            if_nz_else(rq_status) { fail(M_FFB_MISSING) } {
+                set(reg_mode, 1)
+                set(reg_step, 1)
+                set(rs_done, FR_DONE)
+                goto_state(RS_EXEC)
+            }
+        }
+    }
+    if_eq(cli_cur, FR_DONE) {
+        con_text(1, "THE FORCE SPIRIT HAS BEEN BOUND TO DIRECTINPUT.\r\n")
+        set(cli_exit, 0)
+        goto_state(S_EXIT)
+    }
+    ; ---- ffb-unregister ----
+    if_eq(cli_cur, FU_1) {
+        set(reg_mode, 2)
+        set(reg_step, 1)
+        set(rs_done, FU_DONE)
+        goto_state(RS_EXEC)
+    }
+    if_eq(cli_cur, FU_DONE) {
+        con_text(1, "THE FORCE SPIRIT HAS BEEN RELEASED FROM DIRECTINPUT.\r\n")
+        set(cli_exit, 0)
+        goto_state(S_EXIT)
+    }
+    ; ---- the step engine ----
+    if_eq(cli_cur, RS_EXEC) {
+        local done {
+            if_eq(reg_mode, 1) { ge_const(reg_step, REG_END, done) }
+            if_eq(reg_mode, 2) { ge_const(reg_step, UNREG_END, done) }
+            if_eq(reg_mode, 3) { ge_const(reg_step, DIAG_END, done) }
+            if_nz_else(done) {
+                clear(cli_state)
+                copy(rs_done, cli_state)
+            } {
+                ; skip unused step numbers between blocks
+                set(rq_op, 0)
+                if_eq(reg_mode, 1) { register_steps(0) }
+                if_eq(reg_mode, 2) { unregister_steps(0) }
+                if_eq(reg_mode, 3) { diag_steps(0) }
+                if_nz_else(rq_op) { await_state(RS_WAIT) } { @reg_step + }
+            }
+            clear(done)
+        }
+    }
+    if_eq(cli_cur, RS_WAIT) {
+        if_eq(fr_type, 0x30) {
+            parse_reg_result()
+            clear(cli_have)
+            local bad {
+                ; missing keys or values are answers, not failures, for reads and
+                ; key queries
+                if_nz(rq_status) { set(bad, 1) }
+                if_eq(rq_status, 2) {
+                    if_eq(rq_op, OP_READ) { clear(bad) }
+                    if_eq(rq_op, OP_INFO) { clear(bad) }
+                }
+                if_nz_else(bad) {
+                    clear(err + E_NUM)
+                    copy(rq_status, err + E_NUM)
+                    fail(M_REGISTRY)
+                } {
+                    clear(rs_cur)
+                    copy(reg_step, rs_cur)
+                    @reg_step +
+                    goto_state(RS_EXEC)
+                    if_eq(reg_mode, 1) { register_steps(1) }
+                    if_eq(reg_mode, 2) { unregister_steps(1) }
+                    if_eq(reg_mode, 3) { diag_steps(1) }
+                    clear(rs_cur)
+                }
+                clear(bad)
+            }
+        }
+    }
+}

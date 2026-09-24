@@ -1,0 +1,1051 @@
+; ===========================================================================
+; engine.bfa - the force-feedback effect engine (legacy EffectEngine)
+; ===========================================================================
+;
+; Up to 32 DirectInput-style effects are played in software and mixed into one
+; signed force (-10000..10000) along the steering axis. Times are microseconds.
+;
+; Storage: 33 records of REC cells (32 effect slots and a terminator whose
+; 'more' cell is 0). Every operation is one walk over the records: the walk
+; loop moves a block of "carry" cells (the operation, its arguments and the
+; running results) from record to record, and the record code below runs once
+; per record with record-relative ("virtual") addresses RV + offset. Scratch
+; cells come from the record's own pool, so the same code works in every slot.
+;
+; Arithmetic: forces in fixed point with FIX = 64 fractions per force unit.
+; Each effect's value is floored once, so wherever the legacy double arithmetic
+; is exact (all integer inputs) the rounded result is identical; periodic
+; waveforms are computed from a 20-bit cycle position and may differ by one
+; unit. The final mix is rounded half away from zero, like the legacy engine.
+
+const FIX = 64
+const RV = 100000
+const REC = 256
+const REC_BASE = 4608
+const SLOTS = 32
+const FULL = 10000
+
+; ---- record fields (offsets) ----
+const FX_MORE = 0
+const FX_OCC = 1
+const FX_HANDLE = 2
+const FX_KIND = 3
+const FX_PLAYING = 4
+const FX_ITER_INF = 5
+const FX_ITER = 6
+const FX_START = 9
+const FX_DUR_INF = 12
+const FX_DUR = 13
+const FX_GAIN = 16
+const FX_DELAY = 17
+const FX_DIR = 20
+const FX_ENV = 21
+const FX_AL = 22
+const FX_AT = 23
+const FX_FL = 26
+const FX_FT = 27
+const FX_MAG = 30
+const FX_RS = 32
+const FX_RE = 34
+const FX_OFF = 36
+const FX_PHASE = 38
+const FX_PERIOD = 39
+const FX_CO = 42
+const FX_PC = 44
+const FX_NC = 46
+const FX_PS = 48
+const FX_NS = 49
+const FX_DB = 50
+const FX_LAST = 51
+; record work cells
+const W_EL = 52
+const W_ELNEG = 55
+const W_FIN = 56
+const W_IT = 57
+const W_VNEG = 60
+const W_V = 61
+const FX_BACK = 63
+; carry block (moves with the walk)
+const C_OP = 64
+const C_HANDLE = 65
+const C_FOUND = 66
+const C_NOW = 67
+const C_POS = 70
+const C_VEL = 72
+const C_ACC = 74
+const C_GAIN = 76
+const C_SUMP = 77
+const C_SUMN = 78
+const C_ANY = 79
+const C_SOLO = 80
+const C_ITER_INF = 81
+const C_ITER = 82
+const C_SHIFT = 86
+const C_P = 90
+const C_FIRST = 64
+const C_LAST = 138
+; record scratch pool
+scratch RV + 160 to RV + REC
+
+; parameter fields copied by create/update: kind .. dead band, except the
+; playback cells 4..11
+
+
+; walk operations
+const EOP_CREATE = 1
+const EOP_UPDATE = 2
+const EOP_FIND = 3
+const EOP_START = 4
+const EOP_STOP = 5
+const EOP_DESTROY = 6
+const EOP_STOPALL = 7
+const EOP_RESET = 8
+const EOP_SHIFT = 9
+const EOP_PLAYING = 10
+const EOP_ANY = 11
+const EOP_FORCE = 12
+const EOP_GET = 13
+
+; sine polynomial coefficients, Q20: (2 pi)^k / k!
+const SIN_C1 = 6588397
+const SIN_C3 = 43349917
+const SIN_C5 = 85569306
+const SIN_C7 = 80431924
+const SIN_C9 = 44101737
+const Q20 = 1048576
+
+; ---------------------------------------------------------------------------
+; Fixed-point and sign/magnitude helpers
+; ---------------------------------------------------------------------------
+
+; r += floor(a * b / 2^20) for 0 <= a <= 2^20 and 0 <= b < 2^30 (b is split
+; into 10-bit pieces so no product leaves a cell).   a, b: in
+macro mulshift20(a, b, r) {
+    local b0, b1, b2, p, n, q {
+        copy(b, n)
+        divmod_const(n, 1024, q, b0)
+        move(q, n)
+        divmod_const(n, 1024, b2, b1)
+        ; floor((a*b2*2^20 + a*b1*2^10 + a*b0) / 2^20)
+        mul(a, b0, p)
+        div_const(p, 1024, q)
+        mul(a, b1, q)
+        div_const(q, 1024, r)
+        mul(a, b2, r)
+        clear(b0)
+        clear(b1)
+        clear(b2)
+    }
+}
+
+; (an, am) += (bn, bm) in sign/magnitude; zero is never negative.   b: in
+macro sm_add(an, am, bn, bm) {
+    local same, t {
+        eq(an, bn, same)
+        if_z(bm) { set(same, 2) }
+        if_eq(same, 1) { copy(bm, am) }
+        if_z(same) {
+            copy(bm, t)
+            local m {
+                race(am, t, m)
+                ; am, t: what is left of each after removing the common part
+                if_nz(t) {
+                    move(t, am)
+                    clear(an)
+                    copy(bn, an)
+                }
+                clear(t)
+                clear(m)
+            }
+        }
+        clear(same)
+        if_z(am) { clear(an) }
+    }
+}
+
+; flag += (a == b) for two sign/magnitude values.
+macro sm_eq_zero(n, m, flag) {
+    if_z(m) { @flag + }
+}
+
+; ---------------------------------------------------------------------------
+; Record code (runs at virtual addresses RV + offset)
+; ---------------------------------------------------------------------------
+
+macro rclear_fields() {
+    for f = FX_OCC to W_V { clear(RV + f) }
+}
+
+macro rmatch(flag) {
+    if_nz(RV + FX_OCC) { eq(RV + FX_HANDLE, RV + C_HANDLE, flag) }
+}
+
+macro rstore_params() {
+    for field = FX_KIND to FX_LAST {
+        if field < FX_PLAYING || field > FX_START + 2 {
+            clear(RV + field)
+            copy(RV + C_P + field - FX_KIND, RV + field)
+        }
+    }
+}
+
+; W_EL = |now - start - delay|, W_ELNEG, W_FIN (finite effect finished),
+; W_IT = time inside the current iteration.
+macro rtiming() {
+    w_copy(RV + C_NOW, RV + W_EL)
+    local t[3] {
+        w_copy(RV + FX_START, t)
+        w_add(t, RV + FX_DELAY)
+        w_sub_signed(RV + W_EL, t, RV + W_ELNEG)
+        w_clear(t)
+    }
+    clear(RV + W_FIN)
+    w_clear(RV + W_IT)
+    if_z(RV + W_ELNEG) {
+        if_nz_else(RV + FX_DUR_INF) {
+            w_copy(RV + W_EL, RV + W_IT)
+        } {
+            local d[3], q[3], zero {
+                w_copy(RV + FX_DUR, d)
+                w_is_zero(d, zero)
+                if_nz(zero) { set(d, 1) }
+                w_copy(RV + W_EL, RV + W_IT)
+                w_divmod(RV + W_IT, d, q)
+                if_z(RV + FX_ITER_INF) {
+                    ; finished when elapsed >= duration * iterations, that is
+                    ; when the completed iterations reach the count
+                    if_nz_else(zero) { set(RV + W_FIN, 1) } {
+                        w_ge(q, RV + FX_ITER, RV + W_FIN)
+                    }
+                }
+                w_clear(d)
+                w_clear(q)
+                clear(zero)
+            }
+        }
+    }
+}
+
+; Floor of x * FIX / d for a wide x and a wide d > 0: q (cell) += result.
+; Two stages keep every intermediate below 2^48.   x: consumed
+macro rfix_div(x, d, q) {
+    local w[3], r[3], small {
+        w_divmod(x, d, w)
+        ; x is now the remainder
+        w_to_cell(w, q)
+        clear(small)
+        local t {
+            move_mul(q, t, FIX)
+            move(t, q)
+        }
+        w_mul_const(x, FIX)
+        w_divmod(x, d, r)
+        w_to_cell(r, q)
+        w_clear(r)
+        w_clear(w)
+        w_clear(x)
+    }
+}
+
+; Envelope for an integer sustain s (cell): v (cleared) = FIX * value.
+macro renvelope(s, v) {
+    clear(v)
+    local done {
+        if_nz(RV + FX_ENV) {
+            ; attack: attack_time > 0 and it < attack_time
+            local attack {
+                local z {
+                    w_is_zero(RV + FX_AT, z)
+                    if_z(z) {
+                        local ge {
+                            w_ge(RV + W_IT, RV + FX_AT, ge)
+                            if_z(ge) { set(attack, 1) }
+                            clear(ge)
+                        }
+                    }
+                    clear(z)
+                }
+                if_nz(attack) {
+                    set(done, 1)
+                    ; (AL * (AT - it) + s * it) * FIX / AT
+                    local x[3], y[3] {
+                        w_copy(RV + FX_AT, x)
+                        w_sub(x, RV + W_IT)
+                        w_mul_cell(x, RV + FX_AL)
+                        w_copy(RV + W_IT, y)
+                        w_mul_cell(y, s)
+                        w_move_add(y, x)
+                        rfix_div(x, RV + FX_AT, v)
+                    }
+                }
+                clear(attack)
+            }
+            ; fade: finite duration, fade_time > 0, remaining < fade_time
+            if_z(done) {
+                if_z(RV + FX_DUR_INF) {
+                    local z, fade, rem[3] {
+                        w_is_zero(RV + FX_FT, z)
+                        if_z(z) {
+                            w_copy(RV + FX_DUR, rem)
+                            w_sub(rem, RV + W_IT)
+                            local ge {
+                                w_ge(rem, RV + FX_FT, ge)
+                                if_z(ge) { set(fade, 1) }
+                                clear(ge)
+                            }
+                        }
+                        if_nz(fade) {
+                            set(done, 1)
+                            ; (FL * (FT - rem) + s * rem) * FIX / FT
+                            local x[3] {
+                                w_copy(RV + FX_FT, x)
+                                w_sub(x, rem)
+                                w_mul_cell(x, RV + FX_FL)
+                                w_mul_cell(rem, s)
+                                w_move_add(rem, x)
+                                rfix_div(x, RV + FX_FT, v)
+                            }
+                        }
+                        w_clear(rem)
+                        clear(z)
+                        clear(fade)
+                    }
+                }
+            }
+        }
+        if_z(done) { copy_mul(s, v, FIX) }
+        clear(done)
+    }
+}
+
+; Envelope for a fixed-point sustain sf (the ramp): v (cleared). Linear
+; interpolation with a 20-bit time fraction (legacy parity within one unit).
+macro renvelope_fixed(sf, v) {
+    clear(v)
+    local done, level, frac, diff, neg, x[3] {
+        if_nz(RV + FX_ENV) {
+            local attack, z {
+                w_is_zero(RV + FX_AT, z)
+                if_z(z) {
+                    local ge {
+                        w_ge(RV + W_IT, RV + FX_AT, ge)
+                        if_z(ge) { set(attack, 1) }
+                        clear(ge)
+                    }
+                }
+                if_nz(attack) {
+                    set(done, 1)
+                    copy_mul(RV + FX_AL, level, FIX)
+                    w_copy(RV + W_IT, x)
+                    rfrac20(x, RV + FX_AT, frac)
+                }
+                clear(attack)
+                clear(z)
+            }
+            if_z(done) {
+                if_z(RV + FX_DUR_INF) {
+                    local z, fade, rem[3] {
+                        w_is_zero(RV + FX_FT, z)
+                        if_z(z) {
+                            w_copy(RV + FX_DUR, rem)
+                            w_sub(rem, RV + W_IT)
+                            local ge {
+                                w_ge(rem, RV + FX_FT, ge)
+                                if_z(ge) { set(fade, 1) }
+                                clear(ge)
+                            }
+                        }
+                        if_nz(fade) {
+                            set(done, 1)
+                            copy_mul(RV + FX_FL, level, FIX)
+                            rfrac20(rem, RV + FX_FT, frac)
+                        }
+                        w_clear(rem)
+                        clear(z)
+                        clear(fade)
+                    }
+                }
+            }
+            if_nz(done) {
+                ; level + (sf - level) * frac
+                copy(sf, diff)
+                local m, t {
+                    copy(level, t)
+                    race(diff, t, m)
+                    if_nz(t) { move(t, diff) set(neg, 1) }
+                    clear(m)
+                }
+                move(level, v)
+                local p {
+                    mulshift20(frac, diff, p)
+                    if_nz_else(neg) { move_neg(p, v) } { move(p, v) }
+                }
+                clear(diff)
+                clear(neg)
+                clear(frac)
+            }
+        }
+        if_z(done) { copy(sf, v) }
+        clear(done)
+    }
+}
+
+; frac (cleared) = floor(x * 2^20 / d) for x < d (wide). x: consumed
+macro rfrac20(x, d, frac) {
+    clear(frac)
+    local q[3] {
+        w_mul_const(x, 1024)
+        w_divmod(x, d, q)
+        w_to_cell(q, frac)
+        w_clear(q)
+        local t { move_mul(frac, t, 32) move_mul(t, frac, 32) }
+        w_mul_const(x, 1024)
+        w_divmod(x, d, q)
+        w_to_cell(q, frac)
+        w_clear(q)
+        w_clear(x)
+    }
+}
+
+; Sine of a quarter-wave position u (Q20, 0..2^18): s (cleared) = sin(2 pi u)
+; in Q20, by the all-positive Horner form of the Taylor series.
+macro rsine(u, s) {
+    clear(s)
+    local a, p, t {
+        mulshift20(u, u, a)
+        add(p, SIN_C7)
+        local c { add(c, SIN_C9) mulshift20(a, c, t) clear(c) }
+        move_neg(t, p)
+        for k in "531" {
+            let coeff = k == '5' ? SIN_C5 : k == '3' ? SIN_C3 : SIN_C1 {
+                mulshift20(a, p, t)
+                clear(p)
+                add(p, coeff)
+                move_neg(t, p)
+            }
+        }
+        mulshift20(u, p, s)
+        clear(a)
+        clear(p)
+    }
+}
+
+; Waveform of a periodic kind at cycle position c (Q20): (wn, wm) in Q20.
+macro rwave(c, wn, wm) {
+    clear(wn)
+    clear(wm)
+    local half, q1, q3, t {
+        ge_const(c, 524288, half)
+        ge_const(c, 262144, q1)
+        ge_const(c, 786432, q3)
+        ; square
+        if_eq(RV + FX_KIND, 3) {
+            add(wm, Q20)
+            copy(half, wn)
+        }
+        ; sine, by quarter
+        if_eq(RV + FX_KIND, 4) {
+            local u {
+                copy(c, u)
+                if_nz(half) { add(u, -524288) }
+                ; second half of each half-wave runs backwards
+                local back {
+                    copy(q1, back)
+                    copy_neg(half, back)
+                    copy(q3, back)
+                    if_nz(back) {
+                        local v { add(v, 524288) move_neg(u, v) clear(u) move(v, u) }
+                    }
+                    clear(back)
+                }
+                rsine(u, wm)
+                clear(u)
+                copy(half, wn)
+            }
+        }
+        ; triangle: 4c, 2 - 4c, 4c - 4
+        if_eq(RV + FX_KIND, 5) {
+            copy_mul(c, t, 4)
+            if_z(q1) { move(t, wm) }
+            if_nz(q1) {
+                if_z(q3) {
+                    ; 2^21 - 4c, negative after the middle
+                    local v {
+                        add(v, 2097152)
+                        race(v, t, wm)
+                        clear(wm)
+                        if_nz_else(v) { move(v, wm) } { move(t, wm) set(wn, 1) }
+                    }
+                }
+                if_nz(q3) {
+                    local v { add(v, 4194304) move_neg(t, v) move(v, wm) }
+                    set(wn, 1)
+                }
+            }
+            clear(t)
+        }
+        ; sawtooth up: 2c, 2c - 2
+        if_eq(RV + FX_KIND, 6) {
+            copy_mul(c, t, 2)
+            if_nz_else(half) {
+                local v { add(v, 2097152) move_neg(t, v) move(v, wm) }
+                set(wn, 1)
+            } { move(t, wm) }
+            clear(t)
+        }
+        ; sawtooth down: -2c, 2 - 2c
+        if_eq(RV + FX_KIND, 7) {
+            copy_mul(c, t, 2)
+            if_nz_else(half) {
+                local v { add(v, 2097152) move_neg(t, v) move(v, wm) }
+            } { move(t, wm) set(wn, 1) }
+            clear(t)
+        }
+        clear(half)
+        clear(q1)
+        clear(q3)
+        if_z(wm) { clear(wn) }
+    }
+}
+
+; The value of a playing effect: (W_VNEG, W_V) = FIX * value before gains.
+macro revaluate() {
+    clear(RV + W_VNEG)
+    clear(RV + W_V)
+    local kind {
+        copy(RV + FX_KIND, kind)
+        ; ---- constant ----
+        if_eq(kind, 1) {
+            if_nz(RV + FX_MAG + 1) {
+                renvelope(RV + FX_MAG + 1, RV + W_V)
+                copy(RV + FX_MAG, RV + W_VNEG)
+            }
+        }
+        ; ---- ramp: rs + (re - rs) * it / duration ----
+        if_eq(kind, 2) {
+            local rn, rf, exact {
+                set(exact, 1)
+                if_nz(RV + FX_DUR_INF) { clear(exact) }
+                if_nz(exact) {
+                    local z { w_is_zero(RV + FX_DUR, z) if_nz(z) { clear(exact) } clear(z) }
+                }
+                if_nz_else(exact) {
+                    ; X = rs * (duration - it) + re * it, signed
+                    local x[3], y[3], xn, yn {
+                        w_copy(RV + FX_DUR, x)
+                        w_sub(x, RV + W_IT)
+                        w_mul_cell(x, RV + FX_RS + 1)
+                        copy(RV + FX_RS, xn)
+                        w_copy(RV + W_IT, y)
+                        w_mul_cell(y, RV + FX_RE + 1)
+                        copy(RV + FX_RE, yn)
+                        ; signed wide sum
+                        local z { w_is_zero(y, z) if_nz(z) { clear(yn) } clear(z) }
+                        local z { w_is_zero(x, z) if_nz(z) { clear(xn) copy(yn, xn) } clear(z) }
+                        clear(exact)
+                        eq(xn, yn, exact)
+                        if_nz_else(exact) { w_add(x, y) } {
+                            local neg { w_sub_signed(x, y, neg) if_nz(neg) { clear(xn) copy(yn, xn) } clear(neg) }
+                        }
+                        w_clear(y)
+                        clear(yn)
+                        local z { w_is_zero(x, z) if_nz(z) { clear(xn) } clear(z) }
+                        move(xn, rn)
+                        rfix_div(x, RV + FX_DUR, rf)
+                    }
+                } {
+                    copy_mul(RV + FX_RS + 1, rf, FIX)
+                    copy(RV + FX_RS, rn)
+                }
+                if_nz(rf) {
+                    renvelope_fixed(rf, RV + W_V)
+                    copy(rn, RV + W_VNEG)
+                }
+                clear(rn)
+                clear(rf)
+                clear(exact)
+            }
+        }
+        ; ---- periodic: offset + envelope(|magnitude|) * waveform ----
+        if_gt_const(kind, 2) {
+            if_lt_const(kind, 8) {
+                local e, c, wn, wm, z {
+                    renvelope(RV + FX_MAG + 1, e)
+                    w_is_zero(RV + FX_PERIOD, z)
+                    if_z(z) {
+                        ; c = (elapsed mod period) / period + phase / 36000, mod 1, Q20
+                        local m[3], q[3] {
+                            w_copy(RV + W_EL, m)
+                            w_divmod(m, RV + FX_PERIOD, q)
+                            w_clear(q)
+                            rfrac20(m, RV + FX_PERIOD, c)
+                        }
+                        local ph[3], r {
+                            w_from_cell(RV + FX_PHASE, ph)
+                            w_mul_const(ph, 1024)
+                            w_mul_const(ph, 1024)
+                            local k { add(k, 32) w_div_cell(ph, k, r) clear(r) clear(k) }
+                            local k { add(k, 1125) w_div_cell(ph, k, r) clear(r) clear(k) }
+                            w_to_cell(ph, c)
+                            w_clear(ph)
+                        }
+                        ge_const(c, Q20, wn)
+                        if_nz(wn) { add(c, 0 - Q20) }
+                        clear(wn)
+                        rwave(c, wn, wm)
+                        clear(c)
+                        local p {
+                            mulshift20(wm, e, p)
+                            clear(wm)
+                            move(p, wm)
+                        }
+                    }
+                    ; value = offset + amplitude * wave
+                    copy_mul(RV + FX_OFF + 1, RV + W_V, FIX)
+                    copy(RV + FX_OFF, RV + W_VNEG)
+                    if_z(RV + W_V) { clear(RV + W_VNEG) }
+                    sm_add(RV + W_VNEG, RV + W_V, wn, wm)
+                    clear(e)
+                    clear(wn)
+                    clear(wm)
+                    clear(z)
+                }
+            }
+        }
+        ; ---- direction (not for condition effects) ----
+        if_lt_const(kind, 8) {
+            if_nz(RV + FX_DIR) {
+                if_nz(RV + W_V) {
+                    local f { set(f, 1) move_neg(RV + W_VNEG, f) move(f, RV + W_VNEG) }
+                }
+            }
+        }
+        ; ---- conditions ----
+        if_gt_const(kind, 7) {
+            local dn, dm, db, coefn, coefm, sat, excess, inside {
+                ; displacement = metric - offset
+                if_eq(kind, 8) { copy(RV + C_POS, dn) copy(RV + C_POS + 1, dm) }
+                if_eq(kind, 10) { copy(RV + C_ACC, dn) copy(RV + C_ACC + 1, dm) }
+                if_eq(kind, 9) { copy(RV + C_VEL, dn) copy(RV + C_VEL + 1, dm) }
+                if_eq(kind, 11) { copy(RV + C_VEL, dn) copy(RV + C_VEL + 1, dm) }
+                local on, om {
+                    copy(RV + FX_CO + 1, om)
+                    copy(RV + FX_CO, on)
+                    if_z(om) { clear(on) }
+                    ; subtract: add the opposite sign
+                    local f { set(f, 1) move_neg(on, f) move(f, on) }
+                    if_z(om) { clear(on) }
+                    sm_add(dn, dm, on, om)
+                    clear(on)
+                    clear(om)
+                }
+                copy(RV + FX_DB + 1, db)
+                ge(db, dm, inside)
+                if_z(inside) {
+                    copy(dm, excess)
+                    sub_sat(excess, db)
+                    if_nz_else(dn) {
+                        copy(RV + FX_NC, coefn)
+                        copy(RV + FX_NC + 1, coefm)
+                        copy(RV + FX_NS, sat)
+                    } {
+                        copy(RV + FX_PC, coefn)
+                        copy(RV + FX_PC + 1, coefm)
+                        copy(RV + FX_PS, sat)
+                    }
+                    if_eq_else(kind, 11) {
+                        ; friction: |coef| * min(excess, 200) / 200
+                        min_const(excess, 200)
+                        local p { mul(coefm, excess, p) move_mul(p, RV + W_V, FIX) }
+                        local q { div_const(RV + W_V, 200, q) move(q, RV + W_V) }
+                    } {
+                        ; |coef| * excess / 10000, two stages
+                        local p, q, r {
+                            mul(coefm, excess, p)
+                            divmod_const(p, FULL, q, r)
+                            copy_mul(q, RV + W_V, FIX)
+                            clear(q)
+                            local s { move_mul(r, s, FIX) div_const(s, FULL, RV + W_V) }
+                        }
+                    }
+                    ; opposes the displacement: negative when the signs agree
+                    eq(dn, coefn, RV + W_VNEG)
+                    local cap {
+                        copy_mul(sat, cap, FIX)
+                        local over { gt(RV + W_V, cap, over) if_nz(over) { clear(RV + W_V) copy(cap, RV + W_V) } clear(over) }
+                        clear(cap)
+                    }
+                    if_z(RV + W_V) { clear(RV + W_VNEG) }
+                }
+                clear(dn)
+                clear(dm)
+                clear(db)
+                clear(coefn)
+                clear(coefm)
+                clear(sat)
+                clear(excess)
+                clear(inside)
+            }
+        }
+        clear(kind)
+    }
+}
+
+; Contribution of the evaluated value: FIX * value * gain * device gain / 10^8,
+; floored, added to the positive or negative running sum.
+macro rcontribute() {
+    if_nz(RV + W_V) {
+        local w[3], r, c {
+            w_from_cell(RV + W_V, w)
+            w_mul_cell(w, RV + FX_GAIN)
+            w_mul_cell(w, RV + C_GAIN)
+            local k {
+                add(k, FULL)
+                w_div_cell(w, k, r)
+                clear(r)
+                w_div_cell(w, k, r)
+                clear(r)
+                clear(k)
+            }
+            w_to_cell(w, c)
+            w_clear(w)
+            if_nz_else(RV + W_VNEG) { move(c, RV + C_SUMN) } { move(c, RV + C_SUMP) }
+        }
+    }
+}
+
+macro record_body() {
+    local op {
+        copy(RV + C_OP, op)
+        if_eq(op, EOP_CREATE) {
+            if_z(RV + C_FOUND) {
+                if_z(RV + FX_OCC) {
+                    rclear_fields()
+                    rstore_params()
+                    set(RV + FX_OCC, 1)
+                    copy(RV + C_HANDLE, RV + FX_HANDLE)
+                    set(RV + C_FOUND, 1)
+                }
+            }
+        }
+        if_eq(op, EOP_UPDATE) {
+            local m {
+                rmatch(m)
+                if_nz(m) {
+                    rstore_params()
+                    set(RV + C_FOUND, 1)
+                }
+                clear(m)
+            }
+        }
+        if_eq(op, EOP_FIND) {
+            local m { rmatch(m) if_nz(m) { set(RV + C_FOUND, 1) } clear(m) }
+        }
+        if_eq(op, EOP_START) {
+            local m {
+                rmatch(m)
+                if_nz_else(m) {
+                    clear(RV + FX_PLAYING)
+                    if_nz(RV + C_ITER_INF) { set(RV + FX_PLAYING, 1) }
+                    local z { w_is_zero(RV + C_ITER, z) if_z(z) { set(RV + FX_PLAYING, 1) } clear(z) }
+                    clear(RV + FX_ITER_INF)
+                    copy(RV + C_ITER_INF, RV + FX_ITER_INF)
+                    w_copy(RV + C_ITER, RV + FX_ITER)
+                    w_copy(RV + C_NOW, RV + FX_START)
+                } {
+                    if_nz(RV + C_SOLO) { clear(RV + FX_PLAYING) }
+                }
+                clear(m)
+            }
+        }
+        if_eq(op, EOP_STOP) {
+            local m { rmatch(m) if_nz(m) { clear(RV + FX_PLAYING) set(RV + C_FOUND, 1) } clear(m) }
+        }
+        if_eq(op, EOP_DESTROY) {
+            local m { rmatch(m) if_nz(m) { rclear_fields() set(RV + C_FOUND, 1) } clear(m) }
+        }
+        if_eq(op, EOP_GET) {
+            local m {
+                rmatch(m)
+                if_nz(m) {
+                    set(RV + C_FOUND, 1)
+                    for field = FX_KIND to FX_LAST {
+                        if field < FX_PLAYING || field > FX_START + 2 {
+                            clear(RV + C_P + field - FX_KIND)
+                            copy(RV + field, RV + C_P + field - FX_KIND)
+                        }
+                    }
+                }
+                clear(m)
+            }
+        }
+        if_eq(op, EOP_STOPALL) { clear(RV + FX_PLAYING) }
+        if_eq(op, EOP_RESET) { rclear_fields() }
+        if_eq(op, EOP_SHIFT) {
+            if_nz(RV + FX_OCC) { w_add(RV + FX_START, RV + C_SHIFT) }
+        }
+        if_eq(op, EOP_PLAYING) {
+            local m {
+                rmatch(m)
+                if_nz(m) {
+                    set(RV + C_FOUND, 1)
+                    if_nz(RV + FX_PLAYING) {
+                        rtiming()
+                        if_z(RV + W_FIN) { set(RV + C_ANY, 1) }
+                    }
+                }
+                clear(m)
+            }
+        }
+        if_eq(op, EOP_ANY) {
+            if_nz(RV + FX_OCC) {
+                if_nz(RV + FX_PLAYING) {
+                    rtiming()
+                    if_z(RV + W_FIN) { set(RV + C_ANY, 1) }
+                }
+            }
+        }
+        if_eq(op, EOP_FORCE) {
+            if_nz(RV + FX_OCC) {
+                if_nz(RV + FX_PLAYING) {
+                    rtiming()
+                    if_nz_else(RV + W_FIN) { clear(RV + FX_PLAYING) } {
+                        if_z(RV + W_ELNEG) {
+                            revaluate()
+                            rcontribute()
+                        }
+                    }
+                }
+            }
+        }
+        clear(op)
+        ; work cells never outlive the visit
+        for f = W_EL to W_V { clear(RV + f) }
+    }
+}
+
+; ---------------------------------------------------------------------------
+; Walks and operations (global cells)
+; ---------------------------------------------------------------------------
+
+; Runs record_body over every record, carrying the carry block along, then
+; carries the block back to record 0 ('back' is 1 in every record but the
+; first). The caller fills record 0's carry block (REC_BASE + C_*) and reads
+; the results from the same cells afterwards.
+const TERM = REC_BASE + SLOTS * REC
+
+macro walk() {
+    @(REC_BASE + FX_MORE) [!
+        assume @(RV + FX_MORE)
+        record_body()
+        for c = C_FIRST to C_LAST { move(RV + c, RV + REC + c) }
+        @(RV + REC + FX_MORE)
+    ]
+    assume @(TERM + FX_MORE)
+    @(TERM + FX_BACK) [!
+        assume @(RV + FX_BACK)
+        for c = C_FIRST to C_LAST { move(RV + c, RV - REC + c) }
+        @(RV - REC + FX_BACK)
+    ]
+    assume @(REC_BASE + FX_BACK)
+}
+
+macro eng_init() {
+    for i = 0 to SLOTS - 1 { set(REC_BASE + i * REC + FX_MORE, 1) }
+    for i = 1 to SLOTS { set(REC_BASE + i * REC + FX_BACK, 1) }
+    set(e_gain, FULL)
+    set(e_act, 1)
+    set(e_next, 1)
+}
+
+; ---------------------------------------------------------------------------
+; Engine commands. A caller stores the command in e_cmd (and its arguments in
+; e_h, e_now, e_iter*, e_solo, e_motion, gp, e_arg) and expands engine_exec.
+; engine_exec contains the only walk of the program, so the record code exists
+; once. Results: e_status (0 ok, 1 unknown handle, 2 table full, 3 out of
+; range), e_res_neg / e_result.
+; ---------------------------------------------------------------------------
+
+const EC_CREATE = 1
+const EC_UPDATE = 2
+const EC_START = 3
+const EC_STOP = 4
+const EC_DESTROY = 5
+const EC_STOPALL = 6
+const EC_RESET = 7
+const EC_PAUSE = 8
+const EC_CONTINUE = 9
+const EC_ACTUATORS = 10
+const EC_GAIN = 11
+const EC_FORCE = 12
+const EC_PLAYING = 13
+const EC_ANY = 14
+const EC_COUNT = 15
+const EC_PAUSED = 16
+const EC_ACT_ON = 17
+; copies the parameters of effect e_h into gp (status 1 when unknown)
+const EC_GET = 18
+
+; carry for walk operation e_walk: op, handle, now, device gain, and the
+; operation's own inputs
+macro carry_fill() {
+    copy(e_walk, REC_BASE + C_OP)
+    copy(e_h, REC_BASE + C_HANDLE)
+    w_copy(e_now, REC_BASE + C_NOW)
+    copy(e_gain, REC_BASE + C_GAIN)
+    copy(e_solo, REC_BASE + C_SOLO)
+    copy(e_iter_inf, REC_BASE + C_ITER_INF)
+    w_copy(e_iter, REC_BASE + C_ITER)
+    w_copy(e_shift, REC_BASE + C_SHIFT)
+    for i = 0 to 5 { copy(e_motion + i, REC_BASE + C_POS + i) }
+    for field = FX_KIND to FX_LAST {
+        if field < FX_PLAYING || field > FX_START + 2 { copy(gp + field, REC_BASE + C_P + field - FX_KIND) }
+    }
+}
+
+; Clears the carry block (back in record 0 after a walk).
+macro carry_clear() {
+    for c = C_FIRST to C_LAST { clear(REC_BASE + c) }
+}
+
+macro engine_exec() {
+    clear(e_status)
+    clear(e_result)
+    clear(e_res_neg)
+    clear(e_walk)
+    local cmd {
+        copy(e_cmd, cmd)
+        ; ---- checks and state that need no walk ----
+        if_eq(cmd, EC_CREATE) {
+            gt_const(gp + FX_GAIN, FULL, e_status)
+            if_nz_else(e_status) { set(e_status, 3) } {
+                ge_const(e_count, SLOTS, e_status)
+                if_nz_else(e_status) { set(e_status, 2) } {
+                    clear(e_h)
+                    copy(e_next, e_h)
+                    @e_next +
+                    @e_count +
+                    set(e_walk, EOP_CREATE)
+                }
+            }
+        }
+        if_eq(cmd, EC_UPDATE) {
+            gt_const(gp + FX_GAIN, FULL, e_status)
+            if_nz_else(e_status) { set(e_status, 3) } { set(e_walk, EOP_UPDATE) }
+        }
+        ; start: find the handle first, then start (see below)
+        if_eq(cmd, EC_START) {
+            if_nz(e_paused) { w_copy(e_paused_at, e_now) }
+            set(e_walk, EOP_FIND)
+        }
+        if_eq(cmd, EC_STOP) { set(e_walk, EOP_STOP) }
+        if_eq(cmd, EC_DESTROY) { set(e_walk, EOP_DESTROY) }
+        if_eq(cmd, EC_STOPALL) { set(e_walk, EOP_STOPALL) }
+        if_eq(cmd, EC_RESET) {
+            set(e_walk, EOP_RESET)
+            clear(e_count)
+            clear(e_paused)
+            set(e_act, 1)
+        }
+        if_eq(cmd, EC_PAUSE) {
+            if_z(e_paused) {
+                set(e_paused, 1)
+                w_copy(e_now, e_paused_at)
+            }
+        }
+        if_eq(cmd, EC_CONTINUE) {
+            if_nz(e_paused) {
+                ; start times move by the paused duration (never backwards)
+                w_copy(e_now, e_shift)
+                local neg {
+                    w_sub_signed(e_shift, e_paused_at, neg)
+                    if_nz(neg) { w_clear(e_shift) }
+                    clear(neg)
+                }
+                clear(e_paused)
+                set(e_walk, EOP_SHIFT)
+            }
+        }
+        if_eq(cmd, EC_ACTUATORS) {
+            clear(e_act)
+            if_nz(e_arg) { set(e_act, 1) }
+        }
+        if_eq(cmd, EC_GAIN) {
+            gt_const(e_arg, FULL, e_status)
+            if_nz_else(e_status) { set(e_status, 3) } {
+                clear(e_gain)
+                copy(e_arg, e_gain)
+            }
+        }
+        if_eq(cmd, EC_FORCE) {
+            local silent {
+                if_nz(e_paused) { set(silent, 1) }
+                if_z(e_act) { set(silent, 1) }
+                if_z(silent) { set(e_walk, EOP_FORCE) }
+                clear(silent)
+            }
+        }
+        if_eq(cmd, EC_PLAYING) {
+            if_nz(e_paused) { w_copy(e_paused_at, e_now) }
+            set(e_walk, EOP_PLAYING)
+        }
+        if_eq(cmd, EC_ANY) {
+            if_nz(e_paused) { w_copy(e_paused_at, e_now) }
+            set(e_walk, EOP_ANY)
+        }
+        if_eq(cmd, EC_GET) { set(e_walk, EOP_GET) }
+        if_eq(cmd, EC_COUNT) { copy(e_count, e_result) }
+        if_eq(cmd, EC_PAUSED) { copy(e_paused, e_result) }
+        if_eq(cmd, EC_ACT_ON) { copy(e_act, e_result) }
+        ; ---- the walk (a start needs two) ----
+        while_nz(e_walk) {
+            carry_fill()
+            walk()
+            local op {
+                copy(e_walk, op)
+                clear(e_walk)
+                if_eq(op, EOP_FIND) {
+                    if_nz_else(REC_BASE + C_FOUND) { set(e_walk, EOP_START) } { set(e_status, 1) }
+                }
+                if_eq(op, EOP_UPDATE) { if_z(REC_BASE + C_FOUND) { set(e_status, 1) } }
+                if_eq(op, EOP_STOP) { if_z(REC_BASE + C_FOUND) { set(e_status, 1) } }
+                if_eq(op, EOP_DESTROY) {
+                    if_nz_else(REC_BASE + C_FOUND) { @e_count - } { set(e_status, 1) }
+                }
+                if_eq(op, EOP_CREATE) { copy(e_h, e_result) }
+                if_eq(op, EOP_PLAYING) {
+                    if_z(REC_BASE + C_FOUND) { set(e_status, 1) }
+                    copy(REC_BASE + C_ANY, e_result)
+                }
+                if_eq(op, EOP_ANY) { copy(REC_BASE + C_ANY, e_result) }
+                if_eq(op, EOP_GET) {
+                    if_nz_else(REC_BASE + C_FOUND) {
+                        for field = FX_KIND to FX_LAST {
+                            if field < FX_PLAYING || field > FX_START + 2 {
+                                clear(gp + field)
+                                copy(REC_BASE + C_P + field - FX_KIND, gp + field)
+                            }
+                        }
+                    } { set(e_status, 1) }
+                }
+                if_eq(op, EOP_FORCE) {
+                    local p, n, m {
+                        copy(REC_BASE + C_SUMP, p)
+                        copy(REC_BASE + C_SUMN, n)
+                        race(p, n, m)
+                        clear(m)
+                        if_nz(n) { move(n, p) set(e_res_neg, 1) }
+                        min_const(p, FULL * FIX)
+                        ; round half away from zero
+                        add(p, FIX / 2)
+                        div_const(p, FIX, e_result)
+                    }
+                    if_z(e_result) { clear(e_res_neg) }
+                }
+                clear(op)
+            }
+            carry_clear()
+        }
+        clear(cmd)
+    }
+}

@@ -1,0 +1,5 @@
+// g29ffb64.dll / g29ffb32.dll resources: the application program
+// (G29_PROGRAM_PATH is defined by native.ps1).
+#include "program_path.h"
+
+G29_PROGRAM RCDATA G29_PROGRAM_PATH

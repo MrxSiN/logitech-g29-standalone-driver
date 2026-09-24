@@ -1,0 +1,231 @@
+; ===========================================================================
+; watchdog.bfa - the force-feedback crash watchdog (legacy LegacyWatchdog,
+; ForceWatchdog, ForceHeartbeat)
+; ===========================================================================
+;
+; A game that dies while its DirectInput driver holds a force cannot send the
+; stop report itself. The driver (directinput.bfa) beats into a shared memory
+; mapping every 2 ms: the system tick count (ms, u64 at offset 0) and whether a
+; non-zero force is applied (u32 at offset 8). The service creates the mapping
+; (readable and writable by every user) when it starts and checks it every
+; 250 ms: force marked active and no beat for more than 1000 ms means the
+; driver was abandoned. The service then clears the active flag, sends the
+; stop report to the one native G29 (like "g29ctl stop") and logs the result.
+; The check runs beside the monitor; the stop runs between monitor checks.
+
+const EV_SHM_RESULT = 0x33
+const WD_TIMER = 3
+const WD_TIMEOUT_MS = 1000
+
+const SV_3 = 127
+const WD_1 = 130
+const WD_2 = 131
+const WD_3 = 132
+const WD_FAIL = 133
+
+; The mapping's name text (u16 length + bytes), shared with the driver.
+macro emit_heartbeat_name() {
+    out_u16_const(35)
+    out_str("Global")
+    out_const(92)
+    out_str("G29Standalone.ForceHeartbeat")
+}
+
+; flag += abandoned: active and now - beat > 1000 (signed wide values).
+macro wd_abandoned(active, bn, b, nn, n, flag) {
+    if_nz(active) {
+        local dn, d[3], m[3] {
+            w_copy(n, d)
+            copy(nn, dn)
+            ws_sub(dn, d, bn, b)
+            if_z(dn) {
+                set(m, WD_TIMEOUT_MS + 1)
+                w_ge(d, m, flag)
+            }
+            clear(dn)
+            w_clear(d)
+            w_clear(m)
+        }
+    }
+}
+
+; CMD_SHM_CREATE when the service starts.
+macro wd_create() {
+    emit_header(0xC8, 42)
+    emit_heartbeat_name()
+    out_const(16)
+    for k = 0 to 2 { out_const(0) }
+    ; every user may read and write it (the driver runs in game processes)
+    out_const(1)
+}
+
+; The service stops: no more checks, the mapping is closed.
+macro wd_close() {
+    if_nz(wd_on) {
+        emit_header(0xA1, 1)
+        out_const(WD_TIMER)
+        emit_header(0xCC, 4)
+        put_token(wd_h)
+    }
+    clear(wd_on)
+    clear(wd_reading)
+    clear(wd_pending)
+}
+
+; Watchdog events, handled in any state of the service (cli_main runs this
+; before the state machine). A handled event is consumed.
+macro wd_async() {
+    if_eq(mon_mode, 2) {
+        if_nz(wd_on) {
+            local mine {
+                if_eq(fr_type, EV_TIMER) { if_eq(ev_tid, WD_TIMER) { set(mine, 1) } }
+                if_nz(mine) {
+                    ; skip now_us, keep the system tick
+                    local skip[3] { w_read_u64(skip) w_clear(skip) }
+                    w_read_u64(wd_now)
+                    if_z(wd_reading) {
+                        ; CMD_SHM_READ: beat and active flag
+                        emit_header(0xCA, 10)
+                        put_token(wd_h)
+                        for k = 0 to 3 { out_const(0) }
+                        out_u16_const(12)
+                        set(wd_reading, 1)
+                    }
+                    consumed()
+                    set(cli_wait, 1)
+                }
+                clear(mine)
+                if_eq(fr_type, EV_SHM_RESULT) { if_nz(wd_reading) { set(mine, 1) } }
+                if_nz(mine) {
+                    clear(wd_reading)
+                    local err {
+                        read_u32_nz(err)
+                        if_z(err) { wd_evaluate() }
+                        clear(err)
+                    }
+                    consumed()
+                    set(cli_wait, 1)
+                    ; between monitor checks the stop can run at once
+                    if_nz(wd_pending) {
+                        if_eq(cli_state, M_TICK) {
+                            clear(cli_wait)
+                            goto_state(WD_1)
+                        }
+                    }
+                }
+                clear(mine)
+            }
+        }
+    }
+}
+
+; The 12 heartbeat bytes of an EV_SHARED_MEMORY_RESULT: decide, and on
+; abandonment clear the active flag and ask for the stop.
+macro wd_evaluate() {
+    local b[8], active, neg, huge, bw[3], gone {
+        for k = 0 to 7 { frame_in(b + k) }
+        local a { for k = 0 to 3 { frame_in(a) if_nz(a) { set(active, 1) } clear(a) } }
+        ; the beat is an int64: sign and magnitude
+        ge_const(b + 7, 128, neg)
+        if_nz(neg) {
+            local carry {
+                set(carry, 1)
+                for k = 0 to 7 {
+                    local t { add(t, 255) move_neg(b + k, t) move(t, b + k) }
+                    move(carry, b + k)
+                    if_eq(b + k, 256) { clear(b + k) set(carry, 1) }
+                }
+                clear(carry)
+            }
+        }
+        if_nz(b + 6) { set(huge, 1) }
+        if_nz(b + 7) { set(huge, 1) }
+        for i = 0 to 2 {
+            copy(b + 2 * i, bw + i)
+            local t { copy_mul(b + 2 * i + 1, t, 256) move(t, bw + i) }
+        }
+        if_nz_else(huge) {
+            ; far in the past (negative) or the future
+            if_nz(active) { if_nz(neg) { set(gone, 1) } }
+        } {
+            local zero { wd_abandoned(active, neg, bw, zero, wd_now, gone) }
+        }
+        if_nz(gone) {
+            ; clear the active flag (offset 8)
+            emit_header(0xCB, 14)
+            put_token(wd_h)
+            out_const(8)
+            for k = 0 to 2 { out_const(0) }
+            out_u16_const(4)
+            for k = 0 to 3 { out_const(0) }
+            set(wd_pending, 1)
+        }
+        for k = 0 to 7 { clear(b + k) }
+        w_clear(bw)
+        clear(active)
+        clear(neg)
+        clear(huge)
+        clear(gone)
+    }
+}
+
+; States: the heartbeat mapping at service start, and the stop.
+macro st_watchdog() {
+    if_eq(cli_cur, SV_3) {
+        if_eq(fr_type, EV_SHM_RESULT) {
+            local err {
+                clear(err)
+                read_u32_cell(err)
+                if_z(err) {
+                    for k = 0 to 3 { frame_in(wd_h + k) }
+                    set(wd_on, 1)
+                    ; CMD_TIMER_ARM: repeating, 250 ms
+                    emit_header(0xA0, 6)
+                    out_const(WD_TIMER)
+                    out_const(1)
+                    out_const(250)
+                    for k = 0 to 2 { out_const(0) }
+                }
+                if_nz(err) {
+                    ; the legacy service ran on without its watchdog, with a warning
+                    set(sink, 3)
+                    sink_text("Force feedback watchdog unavailable (Windows error ")
+                    sink_dec(err)
+                    sink_text(").")
+                    emit_header(0x83, 3)
+                    out_const(1)
+                    out_u16_const(0)
+                }
+                clear(err)
+            }
+            consumed()
+            set(mon_mode, 2)
+            goto_state(M_START)
+        }
+    }
+    if_eq(cli_cur, WD_1) {
+        clear(wd_pending)
+        set(err_ret, WD_FAIL)
+        set(req_ret, WD_2)
+        goto_state(RN_START)
+    }
+    if_eq(cli_cur, WD_2) {
+        proto_stop()
+        set(send_ret, WD_3)
+        goto_state(W_START)
+    }
+    if_eq(cli_cur, WD_3) {
+        mon_log_begin()
+        sink_text("A DirectInput client stopped responding while applying force. The stop report was sent.")
+        mon_log_end()
+        goto_state(M_NEXT)
+    }
+    if_eq(cli_cur, WD_FAIL) {
+        mon_log_begin()
+        sink_text("A DirectInput client stopped responding while applying force, and the stop report failed: ")
+        print_message()
+        mon_log_end()
+        cells_clear(err, 6)
+        goto_state(M_NEXT)
+    }
+}

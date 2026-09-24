@@ -1,0 +1,352 @@
+; ===========================================================================
+; dieffect.bfa - DIEFFECT interpretation (legacy DirectInputEffectReader)
+; ===========================================================================
+;
+; The bridge serializes a DIEFFECT without interpreting it; di_apply applies the
+; fields DirectInput marked as changed to the staged parameters in gp.
+;
+; Payload (read from the current frame, in this order):
+;   changed u32              DIEP_* flags of the call
+;   present u8               1 when the DIEFFECT pointer is not null
+;   size u32, dx5 size u32, full size u32
+;                            dwSize and the two structure sizes of this process
+;   flags u32, duration u32, sample period u32, gain u32, trigger button u32,
+;   trigger repeat u32, axis count u32
+;   direction present u8, first direction i32
+;   envelope present u8, attack level u32, attack time u32, fade level u32,
+;   fade time u32
+;   start delay u32          (0 unless size >= full size)
+;   type-specific present u8, type-specific size u32, byte count u16, bytes
+;
+; Legacy rules: size >= full reads the start delay, size >= DX5 reads the DX5
+; fields, anything smaller (or no DIEFFECT) is invalid. Gain, envelope levels,
+; periodic magnitude and condition saturations are clamped to 10000, signed
+; values to -10000..10000; the phase is taken modulo 36000. A direction
+; reduces to its sign along the steering axis: the first Cartesian component,
+; sin(angle) for polar and cos(first angle) for spherical coordinates (angles in
+; hundredths of a degree; exactly zero counts as positive). Missing or short
+; type-specific data is invalid. Trigger buttons and sample periods are
+; accepted and ignored.
+;
+; Result: di_inv = 1 when the call is invalid (gp is then meaningless), the
+; changed flags stay in di_chg (the Start flag is used by DownloadEffect).
+
+; flag (cleared first) = bit k of the byte in x.   x: in; k: power of two
+macro bit_of(x, k, flag) {
+    clear(flag)
+    local t, q, r {
+        copy(x, t)
+        divmod_const(t, k, q, r)
+        clear(r)
+        divmod_const(q, 2, t, flag)
+        clear(t)
+    }
+}
+
+; An int32 payload field: n = 1 when negative, w (wide) = its magnitude.
+macro read_i32_wide(n, w) {
+    w_read_u32(w)
+    clear(n)
+    ge_const(w + 1, 32768, n)
+    if_nz(n) {
+        local t[3] {
+            set(t + 2, 1)
+            w_sub(t, w)
+            w_clear(w)
+            w_move_add(t, w)
+        }
+    }
+}
+
+; m (cleared first) = min(w, 10000) for a wide w.   w: in
+macro w_min_full(w, m) {
+    clear(m)
+    local f {
+        w_fits(w, f)
+        if_nz_else(f) {
+            w_to_cell(w, m)
+            min_const(m, 10000)
+        } { set(m, 10000) }
+        clear(f)
+    }
+}
+
+; An int32 payload field clamped to -10000..10000 into (n, m).
+macro read_clamped(n, m) {
+    local w[3] {
+        read_i32_wide(n, w)
+        w_min_full(w, m)
+        w_clear(w)
+    }
+}
+
+; A u32 payload field clamped to 10000 into m.
+macro read_umin(m) {
+    local w[3] {
+        w_read_u32(w)
+        w_min_full(w, m)
+        w_clear(w)
+    }
+}
+
+; m (cleared first) = w mod 36000, as (w mod 200) + 200 ((w / 200) mod 180).
+; w: consumed
+macro w_mod36000(w, m) {
+    clear(m)
+    local k, r1, r2 {
+        add(k, 200)
+        w_div_cell(w, k, r1)
+        clear(k)
+        add(k, 180)
+        w_div_cell(w, k, r2)
+        clear(k)
+        w_clear(w)
+        move_mul(r2, m, 200)
+        move(r1, m)
+    }
+}
+
+; x (cleared first) = a u32 payload field, saturated at 2^30.
+macro read_u32_sat(x) {
+    read_u32_cell(x)
+}
+
+macro di_apply() {
+    clear(di_inv)
+    for i = 0 to 3 { frame_in(di_chg + i) }
+    bit_of(di_chg, 1, di_fdur)
+    bit_of(di_chg, 4, di_fgain)
+    bit_of(di_chg, 64, di_fdir)
+    bit_of(di_chg, 128, di_fenv)
+    bit_of(di_chg + 1, 1, di_fts)
+    bit_of(di_chg + 1, 2, di_fdelay)
+    ; ---- structure size ----
+    local present, size, dx5, full {
+        frame_in(present)
+        read_u32_sat(size)
+        read_u32_sat(dx5)
+        read_u32_sat(full)
+        clear(di_full)
+        ge(size, full, di_full)
+        local ok {
+            ge(size, dx5, ok)
+            if_z(present) { clear(ok) }
+            if_z(ok) { set(di_inv, 1) clear(di_full) }
+            clear(ok)
+        }
+        clear(present)
+        clear(size)
+        clear(dx5)
+        clear(full)
+    }
+    ; ---- DX5 fields ----
+    local polar, spherical {
+        local f[4] {
+            for i = 0 to 3 { frame_in(f + i) }
+            bit_of(f, 32, polar)
+            bit_of(f, 64, spherical)
+            for i = 0 to 3 { clear(f + i) }
+        }
+        ; duration
+        local d[3] {
+            w_read_u32(d)
+            if_nz(di_fdur) {
+                clear(gp + FX_DUR_INF)
+                w_clear(gp + FX_DUR)
+                local inf {
+                    if_eq(d, 65535) { if_eq(d + 1, 65535) { set(inf, 1) } }
+                    if_nz_else(inf) { set(gp + FX_DUR_INF, 1) } { w_copy(d, gp + FX_DUR) }
+                    clear(inf)
+                }
+            }
+            w_clear(d)
+        }
+        ; sample period (ignored)
+        local d[3] { w_read_u32(d) w_clear(d) }
+        ; gain
+        local g {
+            read_umin(g)
+            if_nz(di_fgain) {
+                clear(gp + FX_GAIN)
+                copy(g, gp + FX_GAIN)
+            }
+            clear(g)
+        }
+        ; trigger button and repeat interval (ignored)
+        local d[3] { w_read_u32(d) w_clear(d) w_read_u32(d) w_clear(d) }
+        ; direction: the sign along the steering axis
+        local axes[3], has, neg, w[3] {
+            w_read_u32(axes)
+            frame_in(has)
+            read_i32_wide(neg, w)
+            local z { w_is_zero(axes, z) if_nz(z) { clear(has) } clear(z) }
+            if_nz(di_fdir) {
+                clear(gp + FX_DIR)
+                if_nz(has) {
+                    local angular { copy(polar, angular) copy(spherical, angular)
+                        if_nz_else(angular) {
+                            ; m = angle mod 36000, in 0..35999
+                            local m {
+                                w_mod36000(w, m)
+                                if_nz(neg) {
+                                    if_nz(m) {
+                                        local t { add(t, 36000) move_neg(m, t) move(t, m) }
+                                    }
+                                }
+                                if_nz_else(polar) {
+                                    ; sin < 0 for 18000 < m < 36000
+                                    gt_const(m, 18000, gp + FX_DIR)
+                                } {
+                                    ; cos < 0 for 9000 < m < 27000
+                                    local a, b {
+                                        gt_const(m, 9000, a)
+                                        lt_const(m, 27000, b)
+                                        if_nz(a) { if_nz(b) { set(gp + FX_DIR, 1) } }
+                                        clear(a)
+                                        clear(b)
+                                    }
+                                }
+                                clear(m)
+                            }
+                        } {
+                            copy(neg, gp + FX_DIR)
+                        }
+                        clear(angular)
+                    }
+                }
+            }
+            w_clear(axes)
+            w_clear(w)
+            clear(has)
+            clear(neg)
+        }
+        clear(polar)
+        clear(spherical)
+    }
+    ; ---- envelope ----
+    local has, al, fl, at[3], ft[3] {
+        frame_in(has)
+        read_umin(al)
+        w_read_u32(at)
+        read_umin(fl)
+        w_read_u32(ft)
+        if_nz(di_fenv) {
+            clear(gp + FX_ENV)
+            clear(gp + FX_AL)
+            clear(gp + FX_FL)
+            w_clear(gp + FX_AT)
+            w_clear(gp + FX_FT)
+            if_nz(has) {
+                set(gp + FX_ENV, 1)
+                copy(al, gp + FX_AL)
+                copy(fl, gp + FX_FL)
+                w_copy(at, gp + FX_AT)
+                w_copy(ft, gp + FX_FT)
+            }
+        }
+        clear(has)
+        clear(al)
+        clear(fl)
+        w_clear(at)
+        w_clear(ft)
+    }
+    ; ---- start delay (full structure only) ----
+    local d[3] {
+        w_read_u32(d)
+        if_nz(di_fdelay) {
+            w_clear(gp + FX_DELAY)
+            if_nz(di_full) { w_copy(d, gp + FX_DELAY) }
+        }
+        w_clear(d)
+    }
+    ; ---- type-specific parameters ----
+    local has, size, need, kind {
+        frame_in(has)
+        read_u32_sat(size)
+        ; byte count (the bytes follow)
+        local c { frame_in_u16(c) clear(c) }
+        if_nz(di_fts) {
+            copy(gp + FX_KIND, kind)
+            set(need, 24)
+            if_eq(kind, 1) { set(need, 4) }
+            if_eq(kind, 2) { set(need, 8) }
+            if_gt_const(kind, 2) { if_lt_const(kind, 8) { set(need, 16) } }
+            local short {
+                lt(size, need, short)
+                if_z(has) { set(short, 1) }
+                if_nz_else(short) { set(di_inv, 1) } {
+                    if_eq(kind, 1) { read_clamped(gp + FX_MAG, gp + FX_MAG + 1) }
+                    if_eq(kind, 2) {
+                        read_clamped(gp + FX_RS, gp + FX_RS + 1)
+                        read_clamped(gp + FX_RE, gp + FX_RE + 1)
+                    }
+                    if_gt_const(kind, 2) { if_lt_const(kind, 8) {
+                        ; magnitude: the int32 taken as unsigned, clamped
+                        clear(gp + FX_MAG)
+                        read_umin(gp + FX_MAG + 1)
+                        read_clamped(gp + FX_OFF, gp + FX_OFF + 1)
+                        local w[3] {
+                            w_read_u32(w)
+                            w_mod36000(w, gp + FX_PHASE)
+                        }
+                        w_read_u32(gp + FX_PERIOD)
+                    } }
+                    if_gt_const(kind, 7) {
+                        read_clamped(gp + FX_CO, gp + FX_CO + 1)
+                        read_clamped(gp + FX_PC, gp + FX_PC + 1)
+                        read_clamped(gp + FX_NC, gp + FX_NC + 1)
+                        read_umin(gp + FX_PS)
+                        read_umin(gp + FX_NS)
+                        read_clamped(gp + FX_DB, gp + FX_DB + 1)
+                    }
+                }
+                clear(short)
+            }
+        }
+        clear(has)
+        clear(size)
+        clear(need)
+        clear(kind)
+    }
+    clear(di_fdur)
+    clear(di_fgain)
+    clear(di_fdir)
+    clear(di_fenv)
+    clear(di_fts)
+    clear(di_fdelay)
+    clear(di_full)
+}
+
+; The staged parameters gp in the read_params encoding (87 bytes).
+macro put_params() {
+    put(gp + FX_KIND)
+    if_nz_else(gp + FX_DUR_INF) {
+        for i = 0 to 3 { out_const(255) }
+    } { w_out_u32(gp + FX_DUR) }
+    out_u32(gp + FX_GAIN)
+    w_out_u32(gp + FX_DELAY)
+    put(gp + FX_DIR)
+    put(gp + FX_ENV)
+    out_u32(gp + FX_AL)
+    w_out_u32(gp + FX_AT)
+    out_u32(gp + FX_FL)
+    w_out_u32(gp + FX_FT)
+    for f in "mrso" {
+        let base = f == 'm' ? FX_MAG : f == 'r' ? FX_RS : f == 's' ? FX_RE : FX_OFF {
+            put(gp + base)
+            out_u32(gp + base + 1)
+        }
+    }
+    out_u32(gp + FX_PHASE)
+    w_out_u32(gp + FX_PERIOD)
+    for f in "opn" {
+        let base = f == 'o' ? FX_CO : f == 'p' ? FX_PC : FX_NC {
+            put(gp + base)
+            out_u32(gp + base + 1)
+        }
+    }
+    out_u32(gp + FX_PS)
+    out_u32(gp + FX_NS)
+    put(gp + FX_DB)
+    out_u32(gp + FX_DB + 1)
+}

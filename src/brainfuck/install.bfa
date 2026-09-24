@@ -1,0 +1,92 @@
+; ===========================================================================
+; install.bfa - "g29ctl install-plan": the installation policy
+; ===========================================================================
+;
+; Install-Driver.ps1 and Uninstall-Driver.ps1 only perform generic steps
+; (elevate, build, copy files, run sc.exe, remove files). Every value those
+; steps use comes from here, one "key value" line each:
+;
+;   service      the Windows service name (also the event-log source)
+;   display      service display name
+;   description  service description
+;   directory    install directory name under Program Files
+;   startup      service start type
+;   arguments    service command line after the executable
+;   trigger      sc.exe triggerinfo: start when one of the G29's USB product
+;                IDs arrives (GUID_DEVINTERFACE_USB_DEVICE)
+;   failure-reset, failure-actions   sc.exe failure: restart twice
+;   start-after-install              start once so a connected wheel is set up
+;
+; Options: --range 40..900 (default 900), --autocenter 0..100 (default 0).
+; The trigger lists every product ID the identification in protocol.bfa can
+; recognize: native C24F, compatibility C294 C298 C299 C29A C29B, PS4 mode
+; C260 (reported, never configured).
+
+const IP_1 = 180
+
+macro plan_line(key, value) {
+    con_text(1, key)
+    con_text(1, " ")
+    con_text(1, value)
+    con_text(1, "\r\n")
+}
+
+; one backslash on stdout
+macro con_backslash() {
+    emit_header(0x82, 4)
+    out_const(1)
+    out_u16_const(1)
+    out_const(92)
+}
+
+; "/USB" backslash "VID_046D&PID_" + pid
+macro trigger_pid(pid) {
+    con_text(1, "/USB")
+    con_backslash()
+    con_text(1, "VID_046D&PID_")
+    con_text(1, pid)
+}
+
+macro st_install_plan() {
+    if_eq(cli_cur, IP_1) {
+        mon_options() {
+            local ok, done {
+                value_in_range(v_range, 40, 900, ok)
+                if_z(ok) { set(done, 1) value_error(v_range, N_DEGREES) }
+                clear(ok)
+                if_z(done) {
+                    value_in_range(v_ac, 0, 100, ok)
+                    if_z(ok) { set(done, 1) value_error(v_ac, N_PERCENT) }
+                    clear(ok)
+                }
+                if_z(done) {
+                    plan_line("service", "G29Standalone")
+                    plan_line("display", "G29 Standalone // GHUB == NULL")
+                    plan_line("description", "PLEASE INITIALIZE THE LOGITECH G29 WITHOUT SUMMONING G HUB.")
+                    plan_line("directory", "G29Standalone")
+                    plan_line("startup", "Manual")
+                    con_text(1, "arguments service --range ")
+                    con_dec(1, v_range + 1)
+                    con_text(1, " --autocenter ")
+                    con_dec(1, v_ac + 1)
+                    con_text(1, "\r\n")
+                    con_text(1, "trigger start/device/a5dcbf10-6530-11d2-901f-00c04fb951ed")
+                    trigger_pid("C24F")
+                    trigger_pid("C294")
+                    trigger_pid("C298")
+                    trigger_pid("C299")
+                    trigger_pid("C29A")
+                    trigger_pid("C29B")
+                    trigger_pid("C260")
+                    con_text(1, "\r\n")
+                    plan_line("failure-reset", "86400")
+                    plan_line("failure-actions", "restart/5000/restart/15000")
+                    plan_line("start-after-install", "yes")
+                    set(cli_exit, 0)
+                    goto_state(S_EXIT)
+                }
+                clear(done)
+            }
+        }
+    }
+}

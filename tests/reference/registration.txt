@@ -1,0 +1,55 @@
+# DirectInput registration, diagnostics and service installation data.
+# Frozen from the legacy C# implementation by tools/G29.Reference (reference.ps1).
+# Do not edit by hand. These vectors are the oracle for the Brainfuck port.
+# value <name> <text>; blob <name> <hex>; effect <guid> <name> <attributes hex>
+
+value ClassId {D252A2D4-A917-47D3-BD1B-F5A0138CFE12}
+value ClassKeyPath SOFTWARE\Classes\CLSID\{D252A2D4-A917-47D3-BD1B-F5A0138CFE12}
+value OemKeyPath System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_046D&PID_C24F
+value ForceFeedbackKeyName OEMForceFeedback
+value SteeringAxisKeyPath Axes\0
+value CreatedOemKeyMarker CreatedOemKey
+value CreatedAxisMarker CreatedSteeringAxis
+value ProductKeyPath Software\G29Standalone
+value MarkerKeyPath Software\G29Standalone\DirectInput
+value ClassIdString {D252A2D4-A917-47D3-BD1B-F5A0138CFE12}
+blob DeviceAttributes 00000000E8030000E8030000
+blob SteeringAxisAttributes 01810000
+blob SteeringAxisForceAttributes 0A00000000010000
+effect {13541C20-8E33-11D0-9AD0-00A0C9A06E35} Constant 0100000001860000ED030000ED03000030000000
+effect {13541C21-8E33-11D0-9AD0-00A0C9A06E35} Ramp_Force 0200000002860000EF030000EF03000030000000
+effect {13541C22-8E33-11D0-9AD0-00A0C9A06E35} Square_Wave 0300000003860000EF030000EF03000030000000
+effect {13541C23-8E33-11D0-9AD0-00A0C9A06E35} Sine_Wave 0400000003860000EF030000EF03000030000000
+effect {13541C24-8E33-11D0-9AD0-00A0C9A06E35} Triangle_Wave 0500000003860000EF030000EF03000030000000
+effect {13541C25-8E33-11D0-9AD0-00A0C9A06E35} Sawtooth_Up_Wave 0600000003860000EF030000EF03000030000000
+effect {13541C26-8E33-11D0-9AD0-00A0C9A06E35} Sawtooth_Down_Wave 0700000003860000EF030000EF03000030000000
+effect {13541C27-8E33-11D0-9AD0-00A0C9A06E35} Spring 0800000004D800006D0300006D03000030000000
+effect {13541C28-8E33-11D0-9AD0-00A0C9A06E35} Damper 0900000004D800006D0300006D03000030000000
+effect {13541C29-8E33-11D0-9AD0-00A0C9A06E35} Inertia 0A00000004D800006D0300006D03000030000000
+effect {13541C2A-8E33-11D0-9AD0-00A0C9A06E35} Friction 0B00000004D800006D0300006D03000030000000
+value ClassDisplayName G29Standalone DirectInput force feedback driver
+value AxisDisplayName Wheel axis
+value ThreadingModel Both
+value ServiceName G29Standalone
+value DiagnosticsOemForceFeedbackPath System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_046D&PID_C24F\OEMForceFeedback
+value GHubProcessNames lghub,lghub_agent,lghub_updater,lghub_system_tray,lghub_software_manager
+value HeartbeatMapping Global\G29Standalone.ForceHeartbeat size=16 beat=0:int64 active=8:int32
+value ServiceDisplayName G29 Standalone // GHUB == NULL
+value ServiceDescription PLEASE INITIALIZE THE LOGITECH G29 WITHOUT SUMMONING G HUB.
+value ServiceTriggerInterface a5dcbf10-6530-11d2-901f-00c04fb951ed
+value ServiceTriggerHardwareIds USB\VID_046D&PID_C24F USB\VID_046D&PID_C294 USB\VID_046D&PID_C298 USB\VID_046D&PID_C299 USB\VID_046D&PID_C29A USB\VID_046D&PID_C29B USB\VID_046D&PID_C260
+value ServiceFailureActions reset=86400 restart/5000 restart/15000
+value ServiceBinaryArguments service --range <range> --autocenter <autocenter>
+value InstallDirectory %ProgramFiles%\G29Standalone
+
+# Legacy registration rules (DirectInputDriverRegistrar):
+# register: COM class in HKLM 64-bit and 32-bit views; OEM in HKLM(64) and HKCU;
+#   create OEM key if missing (marker CreatedOemKey=1 in Software\G29Standalone\DirectInput of that root);
+#   refuse if OEMForceFeedback CLSID is foreign AND that CLSID has an InprocServer32 in either view;
+#   create Axes\0 (default 'Wheel axis', Attributes, FFAttributes) only if missing (marker CreatedSteeringAxis=1);
+#   delete and recreate OEMForceFeedback: CLSID, Attributes, Effects\{guid} (default name, Attributes).
+# unregister: per root, CreatedOemKey -> delete OEM key tree; else if CLSID is ours delete OEMForceFeedback
+#   and (if CreatedSteeringAxis) Axes\0 then Axes when empty; delete marker key, then Software\G29Standalone when empty;
+#   then delete the CLSID key tree in both HKLM views.
+# diagnose: HKCU OEM CLSID first, then HKLM; library per view from InprocServer32 default (CodeBase when mscoree.dll);
+#   registered = CLSID and 64-bit library; orphaned = CLSID and neither library.
