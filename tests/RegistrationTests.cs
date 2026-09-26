@@ -107,9 +107,10 @@ namespace G29.Tests
             FakeBridge machine = Machine();
             List<string> before = machine.Registry.Dump();
             machine.RunCli(new[] { "ffb-register" });
-            Assert.True(machine.ExitCode == 0 && machine.Stdout == "THE FORCE SPIRIT HAS BEEN BOUND TO DIRECTINPUT.\r\n", "ffb-register succeeds: " + machine.Stderr);
+            Assert.True(machine.ExitCode == 0 && machine.Stdout == "DirectInput force feedback driver registered.\r\n", "ffb-register succeeds: " + machine.Stderr);
             List<string> wanted = Merge(before, ExpectedRegistration(new[] { "HKLM", "HKCU" }, true, true));
             Compare(wanted, machine.Registry.Dump(), "registration on a clean machine");
+            InstallerKeysMatch(machine.Registry);
 
             // Registering again replaces our own registration and changes nothing.
             FakeBridge again = Machine();
@@ -136,14 +137,37 @@ namespace G29.Tests
             FakeBridge remove = Machine();
             remove.Registry = machine.Registry;
             remove.RunCli(new[] { "ffb-unregister" });
-            Assert.True(remove.ExitCode == 0 && remove.Stdout == "THE FORCE SPIRIT HAS BEEN RELEASED FROM DIRECTINPUT.\r\n", "ffb-unregister succeeds");
+            Assert.True(remove.ExitCode == 0 && remove.Stdout == "DirectInput force feedback driver unregistered.\r\n", "ffb-unregister succeeds");
             Compare(before, remove.Registry.Dump(), "unregistration restores the machine exactly");
 
             FakeBridge missing = Machine();
             missing.Files.Clear();
             missing.RunCli(new[] { "ffb-register" });
-            Assert.True(missing.ExitCode == 1 && missing.Stderr == "[THE VOID OBJECTS] The force feedback driver was not found.\r\n", "missing driver file");
+            Assert.True(missing.ExitCode == 1 && missing.Stderr == "Error: The force feedback driver was not found.\r\n", "missing driver file");
             Assert.Equal(0, missing.RegistryRequests, "nothing is registered without the driver file");
+        }
+
+        // tools\InstallCommon.ps1 removes the per-user registration from other
+        // accounts' hives by itself (Remove-G29UserRegistration); the keys it
+        // names must be exactly the ones the program writes.
+        private static void InstallerKeysMatch(FakeRegistry registry)
+        {
+            var constants = new Dictionary<string, string>();
+            foreach (string line in System.IO.File.ReadAllLines(System.IO.Path.Combine(BfMainTests.RepositoryRoot, "tools", "InstallCommon.ps1")))
+            {
+                System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(line, @"^\$script:(G29Clsid|G29OemKey|G29MarkerKey|G29ProductKey) = '([^']*)'$");
+                if (match.Success)
+                {
+                    constants[match.Groups[1].Value] = match.Groups[2].Value;
+                }
+            }
+
+            Assert.Equal(4, constants.Count, "InstallCommon.ps1 declares the per-user registration keys");
+            Assert.True(constants["G29Clsid"] == OurClass, "the installer's class ID is the program's");
+            Assert.True((string)registry.Get(@"HKCU\" + constants["G29OemKey"] + @"\OEMForceFeedback", "CLSID").Data == OurClass, "the installer's OEM key is the one the program registers");
+            Assert.True(registry.Exists(@"HKCU\" + constants["G29OemKey"] + @"\Axes\0"), "the installer's steering axis key is the one the program registers");
+            Assert.True(registry.Exists(@"HKCU\" + constants["G29MarkerKey"]), "the installer's marker key is the one the program writes");
+            Assert.True(constants["G29MarkerKey"].StartsWith(constants["G29ProductKey"] + @"\", StringComparison.Ordinal), "the marker lies under the product key");
         }
 
         // DirectInput already created the OEM key and its axis: registration adds
@@ -192,7 +216,7 @@ namespace G29.Tests
                 foreign.Registry.Set(@"HKCU\" + Oem + @"\OEMForceFeedback", "CLSID", 1, "{AAAAAAAA-1234-1234-1234-123456789ABC}");
                 foreign.Registry.Set(classHive + @"\SOFTWARE\Classes\CLSID\{AAAAAAAA-1234-1234-1234-123456789ABC}\InprocServer32", string.Empty, 1, @"C:\Other\ffb.dll");
                 foreign.RunCli(new[] { "ffb-register" });
-                Assert.True(foreign.ExitCode == 1 && foreign.Stderr == "[THE VOID OBJECTS] Another force feedback driver ({AAAAAAAA-1234-1234-1234-123456789ABC}) is registered for the G29 in HKEY_CURRENT_USER. Remove it before installing this one.\r\n", "a working foreign driver is refused (" + classHive + "): " + foreign.Stderr);
+                Assert.True(foreign.ExitCode == 1 && foreign.Stderr == "Error: Another force feedback driver ({AAAAAAAA-1234-1234-1234-123456789ABC}) is registered for the G29 in HKEY_CURRENT_USER. Remove it before installing this one.\r\n", "a working foreign driver is refused (" + classHive + "): " + foreign.Stderr);
                 Assert.True(((string)foreign.Registry.Get(@"HKCU\" + Oem + @"\OEMForceFeedback", "CLSID").Data).StartsWith("{AAAA", StringComparison.Ordinal), "the foreign registration is untouched");
             }
 
@@ -212,8 +236,8 @@ namespace G29.Tests
             {
                 "Test G29 | VID 046D PID C24F REV 8900 | native | HID 01:04, reports in/out 13/17",
                 "G HUB processes: none running",
-                "DirectInput OEM force feedback: THE ANCIENT REGISTRATION IS ABSENT",
-                "Axes/buttons may still live; game-driven force effects may remain trapped beyond the veil."
+                "DirectInput OEM force feedback: not registered",
+                "Axes and buttons still work; games get no force feedback from this driver."
             }, Lines(absent.Stdout), "doctor without registration");
             Assert.True(absent.ExitCode == 0, "doctor exit code follows status");
 
@@ -232,7 +256,7 @@ namespace G29.Tests
             {
                 "Test G29 | VID 046D PID C24F REV 8900 | native | HID 01:04, reports in/out 13/17",
                 "G HUB processes: LGHUB (PID 200), lghub (PID 50), lghub_agent (PID 300), lghub_software_manager (PID 2147483)",
-                "DirectInput OEM force feedback: THE ANCIENT REGISTRATION EXISTS",
+                "DirectInput OEM force feedback: registered",
                 "  Registered in: HKEY_CURRENT_USER",
                 "  CLSID: " + OurClass,
                 "  64-bit driver: " + Dll64,
@@ -244,9 +268,9 @@ namespace G29.Tests
             ghost.RunCli(new[] { "doctor" });
             Compare(new List<string>
             {
-                "THE ORACLE SEES NO LOGITECH G29. Check USB + PS3 mode.",
+                "No Logitech G29 was found. Check the USB connection and set the selector to PS3.",
                 "G HUB processes: none running",
-                "DirectInput OEM force feedback: A GHOST REGISTRATION HAUNTS HKEY_LOCAL_MACHINE",
+                "DirectInput OEM force feedback: stale registration in HKEY_LOCAL_MACHINE",
                 "  CLSID {12345678-1234-1234-1234-123456789ABC} points to a driver that is no longer installed (for example an uninstalled G HUB).",
                 "  Run Install-Driver.ps1 to replace it with the G29Standalone driver."
             }, Lines(ghost.Stdout), "doctor with an orphaned registration");

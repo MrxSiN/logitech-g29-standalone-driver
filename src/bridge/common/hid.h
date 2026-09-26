@@ -1,5 +1,5 @@
 /*
- * Generic HID mechanism (port of HidBridge.cs and HidInput.cs): enumerate every
+ * Generic HID mechanism: enumerate every
  * HID interface without filtering, open one by token, write one output report,
  * read a usage's value from input reports, request an input report, read a
  * usage's logical range. Which device is a G29 and what to write is decided by

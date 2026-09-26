@@ -19,14 +19,20 @@ offset size meaning
 ```
 
 - All integers are little-endian and fixed width unless stated.
+- Flags are reserved: every frame in version 1 carries 0. The bridge rejects a
+  command frame with any flag set (forward compatibility: a flag a future
+  version defines is never silently ignored by an older bridge).
 - Text is a u16 byte length followed by UTF-8 bytes. The bridge converts
   UTF-16 to UTF-8 and back; it never interprets the text.
 - Sequence: a command from the program carries a sequence the bridge echoes in
   the matching result event. Sequence 0 is used for unsolicited events.
-- The bridge rejects any malformed command frame (bad magic, version, length
-  over 4096, unknown type, payload that does not match its schema). A rejected
-  command never becomes a Win32 call; the bridge treats it as a program failure
-  and runs the emergency force stop.
+- The bridge rejects any malformed command frame (bad magic, version, set
+  flags, length over 4096, unknown type, payload that does not match its
+  schema, including trailing bytes after the last field). Magic and version are
+  checked as their bytes arrive, the rest of the header once all 8 bytes are
+  in. A rejected command never becomes a Win32 call; the bridge treats it as a
+  program failure: the output guard trips (see below), the stop report is
+  written to every interface holding a force, and the session ends.
 - The program validates every event frame. Bad magic, bad version or a length
   over 4096 is fatal: the program emits `CMD_ABI_ERROR` and `CMD_EXIT`, then
   stops. An unknown event type or an event that is not valid in the current
@@ -173,7 +179,7 @@ starts with `now_us u64`, then:
 | 0x53 | SetGain | id u32, gain u32 | — |
 | 0x54 | SendForceFeedbackCommand | id u32, command u32 | — |
 | 0x55 | GetForceFeedbackState | id u32, present u8, dwSize u32 | 4, 8 |
-| 0x56 | DownloadEffect | id u32, effect id u32, handle present u8, handle u32, then the DIEFFECT serialization of `dieffect.bfa` | 0 (the new handle) |
+| 0x56 | DownloadEffect | id u32, effect id u32, handle present u8, handle u32, then the DIEFFECT serialization (below) | 0 (the new handle) |
 | 0x57 | DestroyEffect | id u32, effect u32 | — |
 | 0x58 | StartEffect | id u32, effect u32, mode u32, count u32 | — |
 | 0x59 | StopEffect | id u32, effect u32 | — |
@@ -239,13 +245,54 @@ starts with `now_us u64`, then:
 
 ### Emergency output guard (bridge, not Brainfuck)
 
-Before any `CMD_HID_WRITE` reaches Windows, the bridge's guard rejects a
-payload that is a constant-force report (`11 08 v 80 00 00 00`) with
-`|v - 0x80|` above the role's hard ceiling (CLI: the 25 % diagnostic limit;
-DirectInput: full scale), and remembers which interfaces were last sent a
-non-zero force (a stop report or a zero constant force releases one). On VM failure, ABI violation, or process exit while such a token is
-open, the guard writes the stop report (`13 00 00 00 00 00 00`) to it without
-running any more Brainfuck.
+Before any `CMD_HID_WRITE` reaches Windows, the bridge's guard
+(`src/bridge/common/guard.c`) checks the payload against the report families
+of the G29 protocol (`docs/PROTOCOL.md`): exactly 7 bytes, a known first byte
+(and second byte for `F8`/`11`/`FE`), every fixed byte as specified and every
+variable field inside its bound (range 40..900, LED mask 0..31, autocenter
+`a` 0..7 with `a` repeated and `b` 1..255, constant force `11 08 v 80 00 00 00`).
+Anything else is an ABI violation. A constant force with `|v - 0x80|` above the
+host's ceiling is refused: CLI 25 % (offset 32), DirectInput full scale, and 0
+once the process has become the service (`CMD_SERVICE_RUN`), which never
+applies force. The ceiling can only be lowered.
+
+The guard remembers which interfaces were last sent a non-zero force and since
+when (a stop report or a zero constant force releases one; a changed force
+continues the hold). On a program fault, ABI violation, lease expiry (below) or
+process exit, the guard *trips*: it writes the stop report
+(`13 00 00 00 00 00 00`) to every such interface without running any more
+Brainfuck, refuses every later non-zero force, and immediately stops again any
+force that passed its check before the trip but was written after it.
+
+### Force lease (bridge, not Brainfuck)
+
+A native thread per host (`src/bridge/common/lease.c`) checks every 50 ms,
+while the guard holds a force:
+
+- hold limit: CLI 6000 ms (the 5000 ms diagnostic plus timer and write
+  latency); DirectInput none, because a DirectInput effect of INFINITE
+  duration is legitimate while the game runs;
+- liveness: input left unread by the program for more than 1000 ms means the
+  program is stuck (in a loop inside its iteration budget, or blocked in a host
+  call such as a hung HID write).
+
+Either expires the lease: the guard trips and the session fails. The program
+cannot arm, extend or disable the lease. The DirectInput host also stops every
+held force when Windows announces a suspend (`PBT_APMSUSPEND`); the game's next
+change of force applies again after resume. A game process that dies without
+running its DLL's detach is covered by the service watchdog (the program's role SERVICE,
+1000 ms heartbeat timeout), not by the lease.
+
+### Registry capability
+
+Registry commands that change something (`CMD_REG_WRITE`, `CMD_REG_CREATE_KEY`,
+`CMD_REG_DELETE_TREE`, `CMD_REG_DELETE_KEY`) are accepted only for key paths at
+or below `SOFTWARE\Classes\CLSID\{D252A2D4-A917-47D3-BD1B-F5A0138CFE12}`,
+`System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_046D&PID_C24F`
+or `Software\G29Standalone` (case-insensitive, no empty segment, no trailing
+backslash), in either root and view. Any other path is an ABI violation. Reads
+are not limited. `CMD_SERVICE_RUN` accepts only a name of 1..64 letters, digits
+and underscores, once.
 
 ## Error model
 
@@ -265,11 +312,50 @@ program to exit statuses and HRESULTs):
                          18  BAD_STATE
 ```
 
-## Liveness
+## Limits
 
-The VM gives the program a step budget between two input reads (default 50
-million steps). Exceeding it is a program failure: the bridge stops the VM and
-runs the emergency force stop.
+| Limit | Value | Enforced by | On violation |
+|---|---|---|---|
+| program text | 32 MiB, only `><+-.,[]` and line endings | `tools/BfAot` at build time | the build fails |
+| brackets | balanced | `tools/BfAot` at build time | the build fails |
+| tape | 131072 cells; accesses proven in range at build time or checked where the pointer reaches a new extreme | compiled code | program fault |
+| cells | signed 32-bit, checked, never wrap | compiled code | program fault |
+| output byte | 0..255 | `bf_out` | program fault |
+| loop iterations between two input reads | 100 000 | compiled code (`BF_ITERATION`) | program fault |
+| command payload | 4096 bytes | frame parser | ABI violation |
+| unread input | 1 MiB | session | session fails closed |
+| input stalled while a force is held | 1000 ms | force lease | guard trips, session fails |
+| continuous force, CLI | 6000 ms | force lease | guard trips, session fails |
+| DirectInput call answered | 10 s | DirectInput host | `E_FAIL`, guard trips, session fails |
+| service stop answered | 10 s | service host | the service stops (its guard never admits force) |
+
+The iteration budget is derived from measurement, not chosen large: the test
+suite runs every recorded scenario on the compiled program, reports the
+longest legitimate stretch between two reads (2 493 loop iterations) and fails
+if the budget is not at least 20 times that. Execution semantics:
+`docs/AOT.md`. Every fault, violation and expiry above ends in the
+same place: guard trip (stop report, no further force), then the host exits or
+answers `E_FAIL`.
+
+## Versioning
+
+The ABI version is the frame's second byte (1). A frame of any other version
+is rejected by both sides (the program: fatal `CMD_ABI_ERROR` and `CMD_EXIT`;
+the bridge: violation). There is no negotiation: the program and the bridge
+ship in the same binary, so a mismatch can only be a build error. Changing a
+payload, a type or a limit incompatibly requires a new version. Adding an event
+type is compatible (the program skips unknown events); adding a command type
+is not (an older bridge rejects it).
+
+## Ordering, sequences and retries
+
+A host processes command frames strictly in the order the program writes
+them, on the program's thread; each answer event carries the command's
+sequence. Events from other threads (timers, HID input, service control) are
+queued whole and delivered in order of posting. The bridge retries nothing: a
+failed Win32 call is reported to the program (status or Win32 error), which
+decides. Every G29 report is a set-state command, so a repeated
+`CMD_HID_WRITE` is harmless.
 
 ## Role TEST (phase 2)
 
@@ -291,15 +377,42 @@ Used by the automated tests only.
 | `L` | mask u8 | status, LED report; status 3 above 31 |
 | `F` | negative u8, magnitude u8 | status, force report; status 3 unless 0/1 and 0..100 |
 | `G` | engine operation + arguments | 6 bytes: status u8, negative u8, value u32 (phase 9-10, see below) |
-| `W` | steering operation + arguments | status, then the operation's values (phase 11, `steering_test.bfa`) |
+| `W` | steering operation + arguments | status, then the operation's values (phase 11, see below) |
 
   Status is 0 (ok), 1 (payload too short), 3 (out of range) or 17 (unknown
   selector). The tests use these entry points to check the protocol.
-- `G` drives the effect engine (`engine.bfa`) directly; the operations are
-  listed in `engine_test.bfa`. Engine status: 0 ok, 1 unknown handle, 2 no
-  free slot, 3 out of range. Signed numbers are sign u8 + magnitude u32; times
-  are u64 microseconds. The role TEST program initializes the engine at boot.
-- `W` drives the steering motion (`steering.bfa`): `x` sets the axis (logical
+- `G` drives the effect engine directly. Every answer is status u8 (0 ok,
+  1 unknown handle, 2 no free slot, 3 out of range), negative u8, value u32.
+  Signed numbers are sign u8 + magnitude u32; times are u64 microseconds. The
+  role TEST program initializes the engine at boot. Operations:
+
+  | Op | Arguments | Meaning / value |
+  |---|---|---|
+  | `c` | params | create; value = handle |
+  | `u` | handle u32, params | update |
+  | `s` | handle, iterations infinite u8, iterations u32, solo u8, now | start |
+  | `p` / `d` | handle | stop / destroy |
+  | `A` / `R` | | stop all / reset |
+  | `P` / `C` | now | pause / continue |
+  | `a` / `g` | on u8 / gain u32 | actuators / device gain |
+  | `f` | now, position, velocity, acceleration (signed each) | mixed force |
+  | `y` | handle, now | playing (0/1) |
+  | `n` | now | any effect playing (0/1) |
+  | `k` / `q` / `o` | | count / paused / actuators on |
+  | `D` | params, DIEFFECT serialization | apply a DIEFFECT to params; answers status (0 ok, 3 invalid) and the 87-byte params |
+
+  params: kind u8, duration u32 (FFFFFFFF = infinite), gain u32, delay u32,
+  direction negative u8, envelope u8, attack level u32, attack time u32, fade
+  level u32, fade time u32, magnitude, ramp start, ramp end, offset (signed
+  each), phase u32, period u32, condition offset, positive coefficient,
+  negative coefficient (signed each), positive saturation u32, negative
+  saturation u32, dead band (signed). A u32 that does not fit a cell is
+  saturated at 2^30.
+- The DIEFFECT serialization (`EV_DI_DOWNLOAD_EFFECT`, `D` above) is written
+  by `serialize_effect` in `src/bridge/directinput/driver.c`;
+  `tests/ReaderParityTests.cs` and `tests/EffectDriverShellTests.cs` pin it
+  with vectors.
+- `W` drives the steering motion: `x` sets the axis (logical
   minimum and maximum as sign u8 + u32, bit size u16) and answers the effective
   range, `s` feeds one raw steering value (u32) at a time (u64 us), `m` answers
   position, velocity and acceleration (sign u8 + u32 each) at a time.

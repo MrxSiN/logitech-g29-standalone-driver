@@ -1,6 +1,6 @@
 namespace G29.Bridge.Runtime
 {
-    // The canonical loops of src/brainfuck/lib/core.bfa, with their closed forms.
+    // Loop shapes that occur in src/brainfuck/g29-main.bf, with their closed forms.
     // Patterns must match the macros exactly (cells named by first appearance);
     // RuntimeTests proves each closed form against plain execution.
     internal static class BfIdiomLibrary

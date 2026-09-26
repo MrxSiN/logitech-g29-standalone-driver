@@ -63,7 +63,7 @@ namespace G29.Tests
                 var actual = new List<string>();
                 foreach (string entry in bridge.Log)
                 {
-                    if (entry.StartsWith("timer", StringComparison.Ordinal) || entry == "log WATCHER AWAKENED. Waiting for a G29 to cross the USB threshold. Ctrl+C performs banishment.")
+                    if (entry.StartsWith("timer", StringComparison.Ordinal) || entry == "log Watching for a G29. Press Ctrl+C to stop.")
                     {
                         continue;
                     }
@@ -137,14 +137,14 @@ namespace G29.Tests
             // Service argument errors end the process before it connects to the SCM.
             var args = new FakeBridge(new FakeBridge.Phase());
             args.RunCli(new[] { "service", "--bogus", "1" });
-            Assert.True(args.ExitCode == 1 && args.Stderr == "[THE VOID OBJECTS] Unknown option '--bogus'.\r\n" && Filter(args.Log, "service-run").Count == 0, "service rejects unknown options");
+            Assert.True(args.ExitCode == 1 && args.Stderr == "Error: Unknown option '--bogus'.\r\n" && Filter(args.Log, "service-run").Count == 0, "service rejects unknown options");
         }
 
         private static void WatchArguments()
         {
             var bridge = new FakeBridge(new FakeBridge.Phase());
             bridge.RunCli(new[] { "watch", "--range" });
-            Assert.True(bridge.ExitCode == 1 && bridge.Stderr == "[THE VOID OBJECTS] A numeric --range value is required.\r\n", "watch validates its options");
+            Assert.True(bridge.ExitCode == 1 && bridge.Stderr == "Error: A numeric --range value is required.\r\n", "watch validates its options");
         }
 
         private static FakeBridge Wheels(string scenario)

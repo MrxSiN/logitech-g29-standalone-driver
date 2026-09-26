@@ -3,22 +3,27 @@ using System.Collections.Generic;
 
 namespace G29.Bridge.Runtime
 {
-    // BF32-G29: classic Brainfuck (only + - < > [ ] , . are commands) with checked,
-    // non-wrapping signed 32-bit cells, a bounded 131072-cell tape, byte input and
-    // byte output. The program runs once and persists: ',' blocks for the next input
-    // byte, so tape state survives between host events.
+    // Test-only reference interpreter. It defines the execution semantics the
+    // ahead-of-time compiler (tools/BfAot) must reproduce; the differential tests
+    // compare the two on every scenario and on random programs.
     //
-    // Liveness: the step budget applies between two input reads, not to the whole
-    // lifetime. A program that computes too long without asking for input fails.
+    // Semantics: only + - < > [ ] , . are commands; signed 32-bit cells, checked
+    // (never wrap); a 131072-cell tape, leaving it faults; byte input and output.
+    // The program runs once and persists: ',' blocks for the next input byte.
     //
-    // Speed: loops that match proven idioms (clear loops, multiply-add loops and the
-    // canonical library loops in BfIdioms) run as single superinstructions. Each
-    // one produces exactly the tape state plain execution would, and falls back to
-    // plain execution whenever its preconditions do not hold.
+    // Liveness: at most `iterationBudget` loop iterations may run between two
+    // input reads. A loop body entered from its test or its back edge counts
+    // once; clear, multiply-add and idiom loops that complete in closed form count
+    // as no iteration.
+    //
+    // Loops that match proven shapes (clear loops, multiply-add loops and the
+    // idioms in BfIdioms) run in closed form. Each produces exactly the tape state
+    // plain execution would, and falls back to plain execution whenever its
+    // preconditions do not hold.
     public sealed class BfVm : IBfMachine
     {
         public const int TapeLength = 131072;
-        public const long DefaultStepBudget = 50000000;
+        public const long DefaultIterationBudget = 100000; // bfrt.h BF_DEFAULT_ITERATION_BUDGET
 
         internal const byte OpAdd = 0;
         internal const byte OpMove = 1;
@@ -34,16 +39,16 @@ namespace G29.Bridge.Runtime
         private readonly int[] tape = new int[TapeLength];
         private readonly Func<int> read;
         private readonly Action<byte> write;
-        private long stepBudget;
+        private long iterationBudget;
         private int pointer;
         private int counter;
-        private long totalSteps;
-        private long stepsSinceRead;
+        private long totalIterations;
+        private long iterationsSinceRead;
         private long superinstructions;
 
         // read returns the next input byte (0..255), blocking as needed, or -1 when
         // the host is shutting the program down.
-        public BfVm(BfProgram program, Func<int> read, Action<byte> write, long stepBudget)
+        public BfVm(BfProgram program, Func<int> read, Action<byte> write, long iterationBudget)
         {
             if (program == null)
             {
@@ -60,20 +65,20 @@ namespace G29.Bridge.Runtime
                 throw new ArgumentNullException("write");
             }
 
-            if (stepBudget <= 0)
+            if (iterationBudget <= 0)
             {
-                throw new ArgumentOutOfRangeException("stepBudget", stepBudget, "Step budget must be positive.");
+                throw new ArgumentOutOfRangeException("iterationBudget", iterationBudget, "The iteration budget must be positive.");
             }
 
             this.program = program;
             this.read = read;
             this.write = write;
-            this.stepBudget = stepBudget;
+            this.iterationBudget = iterationBudget;
         }
 
-        public long TotalSteps
+        public long TotalIterations
         {
-            get { return totalSteps; }
+            get { return totalIterations; }
         }
 
         public long Superinstructions
@@ -102,9 +107,9 @@ namespace G29.Bridge.Runtime
             tape[index] = value;
         }
 
-        public long StepBudget
+        public long IterationBudget
         {
-            get { return stepBudget; }
+            get { return iterationBudget; }
             set
             {
                 if (value <= 0)
@@ -112,7 +117,7 @@ namespace G29.Bridge.Runtime
                     throw new ArgumentOutOfRangeException("value");
                 }
 
-                stepBudget = value;
+                iterationBudget = value;
             }
         }
 
@@ -126,17 +131,12 @@ namespace G29.Bridge.Runtime
             int[] cells = tape;
             int p = pointer;
             int pc = counter;
-            long steps = stepsSinceRead;
-            long budget = stepBudget;
+            long steps = iterationsSinceRead;
+            long budget = iterationBudget;
             try
             {
                 while (pc < length)
                 {
-                    if (++steps > budget)
-                    {
-                        throw new BfFault(string.Format("The Brainfuck program ran more than {0} steps without reading input.", budget), pc);
-                    }
-
                     int argument = arguments[pc];
                     switch (operations[pc])
                     {
@@ -156,12 +156,17 @@ namespace G29.Bridge.Runtime
                             {
                                 pc = argument;
                             }
+                            else
+                            {
+                                Iterate(ref steps, budget, pc);
+                            }
 
                             break;
                         case OpClose:
                             if (cells[p] != 0)
                             {
                                 pc = argument;
+                                Iterate(ref steps, budget, pc);
                             }
 
                             break;
@@ -169,12 +174,12 @@ namespace G29.Bridge.Runtime
                         {
                             pointer = p;
                             counter = pc;
-                            totalSteps += steps;
+                            totalIterations += steps;
                             steps = 0;
                             int value = read();
                             if (value < 0)
                             {
-                                stepsSinceRead = 0;
+                                iterationsSinceRead = 0;
                                 return false;
                             }
 
@@ -241,9 +246,12 @@ namespace G29.Bridge.Runtime
                             {
                                 pc = program.LoopEnd(pc);
                             }
+                            else
+                            {
+                                // The preconditions failed: run the loop body plainly.
+                                Iterate(ref steps, budget, pc);
+                            }
 
-                            // Otherwise the preconditions failed: fall through into the
-                            // loop body and execute it plainly.
                             break;
                         }
                     }
@@ -259,11 +267,19 @@ namespace G29.Bridge.Runtime
             {
                 pointer = p;
                 counter = pc;
-                totalSteps += steps;
-                stepsSinceRead = steps;
+                totalIterations += steps;
+                iterationsSinceRead = steps;
             }
 
             return true;
+        }
+
+        private static void Iterate(ref long iterations, long budget, int pc)
+        {
+            if (++iterations > budget)
+            {
+                throw new BfFault(string.Format("The Brainfuck program ran more than {0} loop iterations without reading input.", budget), pc);
+            }
         }
     }
 

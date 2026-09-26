@@ -1,6 +1,2 @@
-// g29ctl.exe resources: the event-log message table and the application
-// program (G29_PROGRAM_PATH is defined by native.ps1).
-#include "program_path.h"
+// g29ctl.exe resources: the event-log message table (messages.mc).
 #include "messages.rc"
-
-G29_PROGRAM RCDATA G29_PROGRAM_PATH

@@ -4,10 +4,23 @@ namespace G29.Tests
 {
     internal static class Program
     {
-        private static int Main()
+        private static int Main(string[] arguments)
         {
             try
             {
+                if (arguments.Length == 1 && arguments[0] == "--benchmark")
+                {
+                    return Benchmark.Run();
+                }
+
+                if (arguments.Length == 2 && arguments[0] == "--write-programs")
+                {
+                    TestPrograms.Write(arguments[1]);
+                    return 0;
+                }
+
+                ArchitectureTests.Run();
+                AotCompilerTests.Run();
                 ProtocolTests.Run();
                 ReferenceReplay.Run();
                 RuntimeTests.Run();
@@ -24,8 +37,9 @@ namespace G29.Tests
                 WatchdogTests.Run();
                 SelectionParityTests.Run();
                 InstallPlanTests.Run();
-                NativeVmPass();
-                Console.WriteLine("ALL G29 TESTS PASSED. THE PROTOCOL GLYPHS REMAIN CONSISTENT.");
+                SafetyTests.Run();
+                CompiledPass();
+                Console.WriteLine("All G29 tests passed.");
                 return 0;
             }
             catch (Exception exception)
@@ -35,16 +49,16 @@ namespace G29.Tests
             }
         }
 
-        // The same scenarios again, with the application program running on the
-        // native bridge's VM instead of the C# VM: both must produce identical
-        // frames for every recorded behavior.
-        private static void NativeVmPass()
+        // The same scenarios again, with the application program compiled ahead
+        // of time (the shipping code path) instead of the reference interpreter:
+        // both must produce identical frames for every recorded behavior.
+        private static void CompiledPass()
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            NativeVm.Use(System.IO.File.ReadAllText(System.IO.Path.Combine(BfMainTests.RepositoryRoot, "src", "brainfuck", "g29-main.bf")));
+            AotMachine.Use();
             try
             {
-                Assert.True(NativeVm.IdiomCount == BfMainTests.Program.IdiomCount && NativeVm.MulAddCount == BfMainTests.Program.MulAddCount, "both VMs compile the program to the same superinstructions");
+                BfMainTests.Run();
                 ProtocolTests.Run();
                 ReferenceReplay.Run();
                 CliParityTests.Run();
@@ -60,10 +74,12 @@ namespace G29.Tests
             }
             finally
             {
-                NativeVm.Stop();
+                AotMachine.Stop();
             }
 
-            Console.WriteLine("  native VM: every scenario reproduced, {0} ms", stopwatch.ElapsedMilliseconds);
+            Console.WriteLine("  compiled program: every scenario reproduced, {0} ms, at most {1} loop iterations between two reads", stopwatch.ElapsedMilliseconds, AotMachine.PeakIterations);
+            // The budget (bfrt.h) must stay far above every legitimate stretch.
+            Assert.True(AotMachine.PeakIterations > 0 && AotMachine.PeakIterations * 20 < SafetyTests.IterationBudget, "the iteration budget is at least 20 times the worst measured stretch");
         }
     }
 }

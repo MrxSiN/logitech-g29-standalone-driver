@@ -9,8 +9,6 @@ namespace G29.Tests
     // checks the legacy adapter applied.
     internal sealed class ProgramProtocol
     {
-        public const string ProgramResourceName = BrainfuckProgram.ResourceName;
-
         private const int ReportLength = 7;
         private const byte NativeFlag = 0x01;
         private const byte G29HardwareFlag = 0x02;
@@ -24,7 +22,7 @@ namespace G29.Tests
 
         public ProgramProtocol()
         {
-            harness = new BfHarness(Program, BfVm.DefaultStepBudget);
+            harness = new BfHarness(Program, BfVm.DefaultIterationBudget);
             harness.Post(new Frame(0x01, 0, 0, new PayloadWriter().U8(4).U8(IntPtr.Size).U8(0).U8(0).U16(0).ToArray()));
             IList<Frame> boot = harness.Run();
             if (boot.Count != 1 || boot[0].Type != TestResult || boot[0].Payload.Length != 4)
@@ -35,7 +33,7 @@ namespace G29.Tests
 
         public static BfProgram Program
         {
-            get { return BrainfuckProgram.Shared; }
+            get { return BfMainTests.Program; }
         }
 
         public bool IsNative(ushort productId)

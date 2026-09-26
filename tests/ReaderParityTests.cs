@@ -15,7 +15,7 @@ namespace G29.Tests
 
         internal static void Run()
         {
-            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
             harness.Post(BfMainTests.Boot(4));
             harness.Run();
             ushort sequence = 0;
@@ -58,7 +58,7 @@ namespace G29.Tests
             Assert.True(checkedLines > 150, "DIEFFECT fixture replayed");
         }
 
-        // The DIEFFECT part of EV_DI_DOWNLOAD_EFFECT (dieffect.bfa), as the bridge
+        // The DIEFFECT part of EV_DI_DOWNLOAD_EFFECT (ABI.md), as the bridge
         // builds it from the structure in memory.
         internal static byte[] Serialize(IDictionary<string, string> fields)
         {

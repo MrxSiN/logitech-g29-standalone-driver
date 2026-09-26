@@ -3,111 +3,91 @@ param(
     # Passed to g29ctl, which checks them (40..900 and 0..100) and supplies the
     # defaults when they are omitted.
     [System.Nullable[int]]$Range,
-    [System.Nullable[int]]$AutoCenter
+    [System.Nullable[int]]$AutoCenter,
+    # Install the service without the DirectInput force feedback driver, for
+    # example while another vendor's driver owns the G29 registration. Without
+    # it, a failed registration fails (and rolls back) the installation.
+    [switch]$SkipForceFeedback,
+    # Internal: the elevated phase, given the SHA-256 of each binary the
+    # unprivileged phase built and checked.
+    [string]$ArtifactHashes
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'tools\InstallCommon.ps1')
+trap { Write-Host $_ -ForegroundColor Red; Wait-ConsoleClose; break }
 
-function Test-Administrator {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-# The installation policy (service name, display text, arguments, device
-# trigger, recovery, install directory) is decided by the Brainfuck program:
-# "g29ctl install-plan" prints one "key value" line per setting.
-function Get-InstallPlan([string]$Executable, [string[]]$Options) {
-    $lines = & $Executable install-plan @Options
-    if ($LASTEXITCODE -ne 0) {
-        throw 'g29ctl refused the installation options.'
-    }
-
-    $plan = @{}
-    foreach ($line in $lines) {
-        $key, $value = $line -split ' ', 2
-        $plan[$key] = $value
-    }
-
-    foreach ($key in @('service', 'display', 'description', 'directory', 'startup', 'arguments', 'trigger', 'failure-reset', 'failure-actions', 'start-after-install')) {
-        if (-not $plan.ContainsKey($key) -or [string]::IsNullOrEmpty($plan[$key])) {
-            throw "The installation plan has no '$key'."
-        }
-    }
-
-    if ($plan['directory'] -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
-        throw 'The installation plan names an unexpected install directory.'
-    }
-
-    return $plan
-}
-
+$artifacts = Join-Path $PSScriptRoot 'artifacts\bin'
 $options = @()
 if ($null -ne $Range) { $options += @('--range', "$Range") }
 if ($null -ne $AutoCenter) { $options += @('--autocenter', "$AutoCenter") }
 
-if (-not (Test-Administrator)) {
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+if (-not $ArtifactHashes) {
+    # First phase: hash and plan the binaries in artifacts\bin (building them
+    # only when they are missing), then elevate for the installation. Testing,
+    # the device test included, is test.ps1's job.
+    if (Test-Administrator) {
+        Write-Warning 'This PowerShell is elevated; the installation continues in it. A build, if needed, also runs with administrator rights.'
+    }
+
+    if (@($script:G29ShippedFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $artifacts $_)) }).Count) {
+        & (Join-Path $PSScriptRoot 'build.ps1')
+    }
+
+    $hashes = Get-ArtifactHashes $artifacts
+    # fail before the UAC prompt when the options or the plan are wrong
+    $lines = @(& (Join-Path $artifacts 'g29ctl.exe') install-plan @options)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'g29ctl refused the installation options.'
+    }
+
+    $null = ConvertFrom-InstallPlan $lines
+
+    # Invoke-Elevated runs this as PowerShell code, where ';' separates statements.
+    $arguments = "-ArtifactHashes '$hashes'"
     if ($null -ne $Range) { $arguments += " -Range $Range" }
     if ($null -ne $AutoCenter) { $arguments += " -AutoCenter $AutoCenter" }
-    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -Wait -PassThru
-    exit $process.ExitCode
-}
-
-& (Join-Path $PSScriptRoot 'build.ps1')
-$builtExecutable = Join-Path $PSScriptRoot 'artifacts\bin\g29ctl.exe'
-$builtDrivers = @('g29ffb64.dll', 'g29ffb32.dll') | ForEach-Object { Join-Path $PSScriptRoot "artifacts\bin\$_" }
-$plan = Get-InstallPlan $builtExecutable $options
-$serviceName = $plan['service']
-$installDirectory = Join-Path $env:ProgramFiles $plan['directory']
-$installedExecutable = Join-Path $installDirectory 'g29ctl.exe'
-$binaryPath = "`"$installedExecutable`" " + $plan['arguments']
-
-$existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-if ($null -ne $existingService) {
-    if ($existingService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) {
-        Stop-Service -Name $serviceName -Force
-        $existingService.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(15))
+    if ($SkipForceFeedback) { $arguments += ' -SkipForceFeedback' }
+    if (-not (Test-Administrator)) {
+        Invoke-Elevated $PSCommandPath $arguments
     }
 
-    & sc.exe delete $serviceName | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not replace Windows service $serviceName."
-    }
-
-    $deadline = [DateTime]::UtcNow.AddSeconds(10)
-    while ($null -ne (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and [DateTime]::UtcNow -lt $deadline) {
-        Start-Sleep -Milliseconds 200
-    }
+    # already elevated: continue in this process
+    $ArtifactHashes = $hashes
 }
 
-New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
-Copy-Item -LiteralPath $builtExecutable -Destination $installedExecutable -Force
-foreach ($driver in $builtDrivers) {
-    Copy-Item -LiteralPath $driver -Destination (Join-Path $installDirectory (Split-Path -Leaf $driver)) -Force
-}
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination (Join-Path $installDirectory 'LICENSE') -Force
-
-New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName $plan['display'] -Description $plan['description'] -StartupType $plan['startup'] | Out-Null
-& sc.exe triggerinfo $serviceName $plan['trigger'] | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not configure the device trigger for Windows service $serviceName."
+# Elevated phase: only the machine-wide transaction.
+if (-not (Test-Administrator)) {
+    throw 'The installation step needs administrator rights.'
 }
 
-& sc.exe failure $serviceName reset= $plan['failure-reset'] actions= $plan['failure-actions'] | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not configure recovery for Windows service $serviceName."
+$context = @{
+    SourceDirectory   = $artifacts
+    Hashes            = ConvertFrom-ArtifactHashes $ArtifactHashes
+    Options           = $options
+    SkipForceFeedback = [bool]$SkipForceFeedback
+    InstallDirectory  = Get-G29InstallDirectory
+    LicensePath       = Join-Path $PSScriptRoot 'LICENSE'
 }
 
-# DirectInput force feedback driver: COM class (64-bit and 32-bit views) plus the
-# OEMForceFeedback registration for the native G29. Removed by Uninstall-Driver.ps1.
-& $installedExecutable ffb-register
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning 'DirectInput force feedback was not registered; games will not receive force feedback. Run g29ctl doctor for details.'
+try {
+    $null = Invoke-G29Install $context (New-WindowsMachine)
+} catch {
+    Write-Warning "Installation failed and was rolled back: $($_.Exception.Message)"
+    throw
 }
 
-if ($plan['start-after-install'] -eq 'yes') {
-    Start-Service -Name $serviceName
+if ($SkipForceFeedback) {
+    Write-Warning 'DirectInput force feedback was not registered (-SkipForceFeedback); games will not receive force feedback from this driver.'
 }
 
-Write-Host "[SUMMONING COMPLETE] $serviceName sleeps until a G29 crosses the USB threshold, and returns to the crypt 15 seconds after it leaves. G HUB may remain peacefully unopened."
+# Verify the result as Windows sees it.
+$installed = Join-Path $context.InstallDirectory 'g29ctl.exe'
+$service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$script:G29ServiceName'"
+if (-not $service -or -not (Test-OwnedServicePath $service.PathName $installed)) {
+    throw "Installation finished, but the $script:G29ServiceName service does not run $installed. Run Uninstall-Driver.ps1, then install again."
+}
+
+Write-Host "Installed $script:G29ServiceName in $($context.InstallDirectory). The service starts when a G29 is connected and stops 15 seconds after the last one is removed."
+Wait-ConsoleClose

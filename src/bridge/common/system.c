@@ -132,6 +132,40 @@ static int registry_read(HKEY hive, REGSAM view, const wchar_t *path, const wcha
     return 0;
 }
 
+/* The only keys (and their subkeys) the program may create, change or delete,
+   under HKLM or HKCU in either view: the DirectInput class, the native G29's
+   OEM joystick entry and the project's own key (ABI.md, Registry capability). Reads are
+   not limited. The program decides what to write there; this bounds what a
+   wrong program could make an administrator change. */
+static const wchar_t *const writable_keys[] = {
+    L"SOFTWARE\\Classes\\CLSID\\{D252A2D4-A917-47D3-BD1B-F5A0138CFE12}",
+    L"System\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick\\OEM\\VID_046D&PID_C24F",
+    L"Software\\G29Standalone"
+};
+
+int system_registry_writable(const wchar_t *path)
+{
+    size_t index;
+    if (!path) {
+        return 0;
+    }
+
+    for (index = 0; index < sizeof(writable_keys) / sizeof(writable_keys[0]); index++) {
+        size_t length = wcslen(writable_keys[index]);
+        if (_wcsnicmp(path, writable_keys[index], length) == 0 && (path[length] == 0 || path[length] == L'\\')) {
+            /* no empty segments below the allowed key */
+            const wchar_t *rest = path + length;
+            if (wcsstr(rest, L"\\\\") || (rest[0] && rest[wcslen(rest) - 1] == L'\\')) {
+                return 0;
+            }
+
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int system_registry(uint8_t type, payload_reader *request, payload_writer *out, char *error, size_t error_length)
 {
     unsigned int root = pr_u8(request);
@@ -161,6 +195,12 @@ int system_registry(uint8_t type, payload_reader *request, payload_writer *out, 
     default:
         free(path);
         snprintf(error, error_length, "Unknown registry view %u.", view_code);
+        return 1;
+    }
+
+    if (type != 0xB0 && type != 0xB4 && !system_registry_writable(path)) {
+        free(path);
+        snprintf(error, error_length, "The program may not change that registry key.");
         return 1;
     }
 
@@ -450,12 +490,16 @@ void shm_free_table(shared_memory *table)
         return;
     }
 
+    /* calloc zeroed every entry (analysis warning C6001 does not see it) */
+#pragma warning(push)
+#pragma warning(disable: 6001)
     for (index = 0; index < SHM_MAX; index++) {
         if (table->entries[index].handle) {
             UnmapViewOfFile(table->entries[index].view);
             CloseHandle(table->entries[index].mapping);
         }
     }
+#pragma warning(pop)
 
     DeleteCriticalSection(&table->lock);
     free(table);

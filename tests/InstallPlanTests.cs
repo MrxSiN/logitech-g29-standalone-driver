@@ -13,8 +13,8 @@ namespace G29.Tests
             Assert.True(bridge.Stdout == string.Join("\r\n", new List<string>
             {
                 "service G29Standalone",
-                "display G29 Standalone // GHUB == NULL",
-                "description PLEASE INITIALIZE THE LOGITECH G29 WITHOUT SUMMONING G HUB.",
+                "display G29 Standalone",
+                "description Initializes and configures the Logitech G29 without Logitech G HUB.",
                 "directory G29Standalone",
                 "startup Manual",
                 "arguments service --range 900 --autocenter 0",
@@ -42,7 +42,7 @@ namespace G29.Tests
             {
                 bridge = new FakeBridge(new FakeBridge.Phase());
                 bridge.RunCli(arguments);
-                Assert.True(bridge.ExitCode == 1 && bridge.Stdout.Length == 0 && bridge.Stderr.StartsWith("[THE VOID OBJECTS] "), "refused: " + string.Join(" ", arguments));
+                Assert.True(bridge.ExitCode == 1 && bridge.Stdout.Length == 0 && bridge.Stderr.StartsWith("Error: "), "refused: " + string.Join(" ", arguments));
             }
         }
     }

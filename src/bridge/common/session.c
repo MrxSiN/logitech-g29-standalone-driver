@@ -19,9 +19,13 @@ struct g29_session {
     input_chunk *head;
     input_chunk *tail;
     size_t pending;
+    /* GetTickCount64 of the last consumed byte, or of input arriving at an
+       empty queue: the watchdog's measure of progress */
+    ULONGLONG progress;
     int stopping;
     int failed;
-    bf_vm *vm;
+    bf_program_fn program;
+    bf_context machine;
     frame_parser parser;
     session_command_fn command;
     session_failure_fn failure;
@@ -40,6 +44,7 @@ static int session_read(void *context)
         if (chunk) {
             value = chunk->bytes[chunk->position++];
             session->pending--;
+            session->progress = GetTickCount64();
             if (chunk->position == chunk->length) {
                 session->head = chunk->next;
                 if (!session->head) {
@@ -89,6 +94,12 @@ static int session_write(void *context, unsigned char value)
 static void session_fail(g29_session *session, const char *message)
 {
     EnterCriticalSection(&session->lock);
+    if (session->failed) {
+        /* reported once, whoever noticed first */
+        LeaveCriticalSection(&session->lock);
+        return;
+    }
+
     session->failed = 1;
     session->stopping = 1;
     WakeAllConditionVariable(&session->available);
@@ -101,13 +112,12 @@ static void session_fail(g29_session *session, const char *message)
 static unsigned __stdcall session_thread(void *argument)
 {
     g29_session *session = (g29_session *)argument;
-    char fault[256];
     int result;
     session->violation[0] = 0;
-    result = bf_vm_run(session->vm, fault, sizeof(fault));
+    result = session->program(&session->machine);
     if (result == BF_FAULT) {
         /* a refused output carries the bridge's reason */
-        session_fail(session, session->violation[0] ? session->violation : fault);
+        session_fail(session, session->violation[0] ? session->violation : session->machine.fault);
     } else if (result == BF_FINISHED) {
         int stopping;
         EnterCriticalSection(&session->lock);
@@ -121,7 +131,7 @@ static unsigned __stdcall session_thread(void *argument)
     return 0;
 }
 
-g29_session *session_create(const bf_program *program, session_command_fn command, session_failure_fn failure, void *context, int64_t step_budget)
+g29_session *session_create(bf_program_fn program, session_command_fn command, session_failure_fn failure, void *context, int64_t budget)
 {
     g29_session *session = (g29_session *)calloc(1, sizeof(g29_session));
     if (!session) {
@@ -133,8 +143,8 @@ g29_session *session_create(const bf_program *program, session_command_fn comman
     session->command = command;
     session->failure = failure;
     session->context = context;
-    session->vm = bf_vm_create(program, session_read, session_write, session, step_budget);
-    if (!session->vm) {
+    session->program = program;
+    if (!program || !bf_context_init(&session->machine, session_read, session_write, session, budget)) {
         DeleteCriticalSection(&session->lock);
         free(session);
         return NULL;
@@ -152,6 +162,7 @@ int session_start(g29_session *session)
 void session_post(g29_session *session, uint8_t type, uint16_t sequence, const uint8_t *payload, size_t length)
 {
     input_chunk *chunk;
+    int overflow = 0;
     if (length > FRAME_MAX_PAYLOAD) {
         return;
     }
@@ -171,16 +182,42 @@ void session_post(g29_session *session, uint8_t type, uint16_t sequence, const u
         return;
     }
 
-    if (session->tail) {
-        session->tail->next = chunk;
+    if (session->pending + chunk->length > SESSION_MAX_PENDING) {
+        overflow = 1;
     } else {
-        session->head = chunk;
+        if (session->tail) {
+            session->tail->next = chunk;
+        } else {
+            session->head = chunk;
+            session->progress = GetTickCount64();
+        }
+
+        session->tail = chunk;
+        session->pending += chunk->length;
+        WakeAllConditionVariable(&session->available);
     }
 
-    session->tail = chunk;
-    session->pending += chunk->length;
-    WakeAllConditionVariable(&session->available);
     LeaveCriticalSection(&session->lock);
+    if (overflow) {
+        /* the program stopped keeping up: dropping events would corrupt its
+           view of the world, so the session fails closed instead */
+        free(chunk);
+        session_fail(session, "The Brainfuck program fell too far behind its input.");
+    }
+}
+
+void session_abort(g29_session *session, const char *message)
+{
+    session_fail(session, message);
+}
+
+int session_stalled(g29_session *session, unsigned long milliseconds)
+{
+    int stalled;
+    EnterCriticalSection(&session->lock);
+    stalled = session->pending > 0 && !session->stopping && GetTickCount64() - session->progress > milliseconds;
+    LeaveCriticalSection(&session->lock);
+    return stalled;
 }
 
 void session_stop(g29_session *session)
@@ -239,7 +276,7 @@ void session_free(g29_session *session)
         chunk = next;
     }
 
-    bf_vm_free(session->vm);
+    bf_context_free(&session->machine);
     DeleteCriticalSection(&session->lock);
     free(session);
 }

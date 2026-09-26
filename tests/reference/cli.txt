@@ -5,9 +5,9 @@
 # then discovery events, 'out <line>' / 'err <line>' console output, and 'exit <code>'
 
 case  ; wheel native
-out G29 STANDALONE HID NECROMANCER // G_HUB == NULL
+out G29 Standalone: Logitech G29 controller without G HUB
 out 
-out AVAILABLE INCANTATIONS:
+out Commands:
 out   g29ctl status
 out   g29ctl doctor
 out   g29ctl init [--range 40..900] [--autocenter 0..100]
@@ -20,9 +20,9 @@ out   g29ctl watch [--range 40..900] [--autocenter 0..100]
 exit 0
 
 case --help ; wheel native
-out G29 STANDALONE HID NECROMANCER // G_HUB == NULL
+out G29 Standalone: Logitech G29 controller without G HUB
 out 
-out AVAILABLE INCANTATIONS:
+out Commands:
 out   g29ctl status
 out   g29ctl doctor
 out   g29ctl init [--range 40..900] [--autocenter 0..100]
@@ -35,9 +35,9 @@ out   g29ctl watch [--range 40..900] [--autocenter 0..100]
 exit 0
 
 case -h ; wheel native
-out G29 STANDALONE HID NECROMANCER // G_HUB == NULL
+out G29 Standalone: Logitech G29 controller without G HUB
 out 
-out AVAILABLE INCANTATIONS:
+out Commands:
 out   g29ctl status
 out   g29ctl doctor
 out   g29ctl init [--range 40..900] [--autocenter 0..100]
@@ -50,9 +50,9 @@ out   g29ctl watch [--range 40..900] [--autocenter 0..100]
 exit 0
 
 case help ; wheel native
-out G29 STANDALONE HID NECROMANCER // G_HUB == NULL
+out G29 Standalone: Logitech G29 controller without G HUB
 out 
-out AVAILABLE INCANTATIONS:
+out Commands:
 out   g29ctl status
 out   g29ctl doctor
 out   g29ctl init [--range 40..900] [--autocenter 0..100]
@@ -65,19 +65,19 @@ out   g29ctl watch [--range 40..900] [--autocenter 0..100]
 exit 0
 
 case HELP ; wheel native
-err [THE VOID OBJECTS] Unknown command 'HELP'. Run g29ctl --help.
+err Error: Unknown command 'HELP'. Run g29ctl --help.
 exit 1
 
 case --HELP ; wheel native
-err [THE VOID OBJECTS] Unknown command '--HELP'. Run g29ctl --help.
+err Error: Unknown command '--HELP'. Run g29ctl --help.
 exit 1
 
 case /? ; wheel native
-err [THE VOID OBJECTS] Unknown command '/?'. Run g29ctl --help.
+err Error: Unknown command '/?'. Run g29ctl --help.
 exit 1
 
 case bogus ; wheel native
-err [THE VOID OBJECTS] Unknown command 'bogus'. Run g29ctl --help.
+err Error: Unknown command 'bogus'. Run g29ctl --help.
 exit 1
 
 case Status ; wheel native
@@ -88,7 +88,7 @@ exit 0
 case Status ; wheel none
 enumerate g29
 enumerate ps4
-out THE ORACLE SEES NO LOGITECH G29. Check USB + PS3 mode.
+out No Logitech G29 was found. Check the USB connection and set the selector to PS3.
 exit 2
 
 case Status ; wheel compat
@@ -99,7 +99,7 @@ exit 0
 case Status ; wheel ps4
 enumerate g29
 enumerate ps4
-out THE ORACLE SEES A G29 WEARING ITS PS4 MASK. The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+out The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 2
 
 case Status ; wheel two
@@ -116,7 +116,7 @@ exit 0
 case status ; wheel none
 enumerate g29
 enumerate ps4
-out THE ORACLE SEES NO LOGITECH G29. Check USB + PS3 mode.
+out No Logitech G29 was found. Check the USB connection and set the selector to PS3.
 exit 2
 
 case status ; wheel compat
@@ -127,7 +127,7 @@ exit 0
 case status ; wheel ps4
 enumerate g29
 enumerate ps4
-out THE ORACLE SEES A G29 WEARING ITS PS4 MASK. The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+out The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 2
 
 case status ; wheel two
@@ -144,7 +144,7 @@ exit 0
 case status|extra ; wheel none
 enumerate g29
 enumerate ps4
-out THE ORACLE SEES NO LOGITECH G29. Check USB + PS3 mode.
+out No Logitech G29 was found. Check the USB connection and set the selector to PS3.
 exit 2
 
 case status|extra ; wheel compat
@@ -155,7 +155,7 @@ exit 0
 case status|extra ; wheel ps4
 enumerate g29
 enumerate ps4
-out THE ORACLE SEES A G29 WEARING ITS PS4 MASK. The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+out The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 2
 
 case status|extra ; wheel two
@@ -175,13 +175,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 900 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 900 degrees | 0% autocenter.
 exit 0
 
 case init ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init ; wheel compat
@@ -200,18 +200,18 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 900 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 900 degrees | 0% autocenter.
 exit 0
 
 case init ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range|540 ; wheel native
@@ -225,13 +225,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|540 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|540 ; wheel compat
@@ -250,18 +250,18 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|540 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|540 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--autocenter|50|--range|40 ; wheel native
@@ -276,13 +276,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 40 degrees | 50% autocenter.
+out Initialized Test G29 -> native mode | 40 degrees | 50% autocenter.
 exit 0
 
 case init|--autocenter|50|--range|40 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--autocenter|50|--range|40 ; wheel compat
@@ -302,18 +302,18 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 40 degrees | 50% autocenter.
+out Initialized Test G29 -> native mode | 40 degrees | 50% autocenter.
 exit 0
 
 case init|--autocenter|50|--range|40 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--autocenter|50|--range|40 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--RANGE|720 ; wheel native
@@ -327,13 +327,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 720 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 720 degrees | 0% autocenter.
 exit 0
 
 case init|--RANGE|720 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--RANGE|720 ; wheel compat
@@ -352,63 +352,63 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 720 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 720 degrees | 0% autocenter.
 exit 0
 
 case init|--RANGE|720 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--RANGE|720 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range ; wheel native
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range ; wheel none
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range ; wheel compat
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range ; wheel ps4
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range ; wheel two
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|abc ; wheel native
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|abc ; wheel none
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|abc ; wheel compat
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|abc ; wheel ps4
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|abc ; wheel two
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|39 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 40 and 900.
+err Error: Value must be between 40 and 900.
 err Parameter name: degrees
 err Actual value was 39.
 exit 1
@@ -416,7 +416,7 @@ exit 1
 case init|--range|39 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|39 ; wheel compat
@@ -426,7 +426,7 @@ send c1 F80A0000000000
 send c1 F8090501010000
 close c1
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 40 and 900.
+err Error: Value must be between 40 and 900.
 err Parameter name: degrees
 err Actual value was 39.
 exit 1
@@ -434,17 +434,17 @@ exit 1
 case init|--range|39 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|39 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range|901 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 40 and 900.
+err Error: Value must be between 40 and 900.
 err Parameter name: degrees
 err Actual value was 901.
 exit 1
@@ -452,7 +452,7 @@ exit 1
 case init|--range|901 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|901 ; wheel compat
@@ -462,7 +462,7 @@ send c1 F80A0000000000
 send c1 F8090501010000
 close c1
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 40 and 900.
+err Error: Value must be between 40 and 900.
 err Parameter name: degrees
 err Actual value was 901.
 exit 1
@@ -470,12 +470,12 @@ exit 1
 case init|--range|901 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|901 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--autocenter|101 ; wheel native
@@ -483,7 +483,7 @@ enumerate g29
 open n1
 send n1 F8818403000000
 close n1
-err [THE VOID OBJECTS] Value must be between 0 and 100.
+err Error: Value must be between 0 and 100.
 err Parameter name: percent
 err Actual value was 101.
 exit 1
@@ -491,7 +491,7 @@ exit 1
 case init|--autocenter|101 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--autocenter|101 ; wheel compat
@@ -504,7 +504,7 @@ enumerate g29
 open n2
 send n2 F8818403000000
 close n2
-err [THE VOID OBJECTS] Value must be between 0 and 100.
+err Error: Value must be between 0 and 100.
 err Parameter name: percent
 err Actual value was 101.
 exit 1
@@ -512,32 +512,32 @@ exit 1
 case init|--autocenter|101 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--autocenter|101 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--bogus|1 ; wheel native
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case init|--bogus|1 ; wheel none
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case init|--bogus|1 ; wheel compat
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case init|--bogus|1 ; wheel ps4
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case init|--bogus|1 ; wheel two
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case init|stray ; wheel native
@@ -551,13 +551,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 900 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 900 degrees | 0% autocenter.
 exit 0
 
 case init|stray ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|stray ; wheel compat
@@ -576,18 +576,18 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 900 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 900 degrees | 0% autocenter.
 exit 0
 
 case init|stray ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|stray ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range|540|--range|900 ; wheel native
@@ -601,13 +601,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|540|--range|900 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|540|--range|900 ; wheel compat
@@ -626,18 +626,18 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|540|--range|900 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|540|--range|900 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range|+540 ; wheel native
@@ -651,13 +651,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|+540 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|+540 ; wheel compat
@@ -676,18 +676,18 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|+540 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|+540 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range| 540 ; wheel native
@@ -701,13 +701,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range| 540 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range| 540 ; wheel compat
@@ -726,18 +726,18 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range| 540 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range| 540 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range|0540 ; wheel native
@@ -751,13 +751,13 @@ close n1
 open n1
 send n1 F8120000000000
 close n1
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|0540 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|0540 ; wheel compat
@@ -776,118 +776,118 @@ close n2
 open n2
 send n2 F8120000000000
 close n2
-out SUMMONING COMPLETE: Test G29 -> native mode | 540 degrees | 0% autocenter.
+out Initialized Test G29 -> native mode | 540 degrees | 0% autocenter.
 exit 0
 
 case init|--range|0540 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case init|--range|0540 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case init|--range|5.4 ; wheel native
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|5.4 ; wheel none
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|5.4 ; wheel compat
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|5.4 ; wheel ps4
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|5.4 ; wheel two
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|99999999999 ; wheel native
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|99999999999 ; wheel none
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|99999999999 ; wheel compat
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|99999999999 ; wheel ps4
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|99999999999 ; wheel two
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--i-understand ; wheel native
-err [THE VOID OBJECTS] Unknown option '--i-understand'.
+err Error: Unknown option '--i-understand'.
 exit 1
 
 case init|--i-understand ; wheel none
-err [THE VOID OBJECTS] Unknown option '--i-understand'.
+err Error: Unknown option '--i-understand'.
 exit 1
 
 case init|--i-understand ; wheel compat
-err [THE VOID OBJECTS] Unknown option '--i-understand'.
+err Error: Unknown option '--i-understand'.
 exit 1
 
 case init|--i-understand ; wheel ps4
-err [THE VOID OBJECTS] Unknown option '--i-understand'.
+err Error: Unknown option '--i-understand'.
 exit 1
 
 case init|--i-understand ; wheel two
-err [THE VOID OBJECTS] Unknown option '--i-understand'.
+err Error: Unknown option '--i-understand'.
 exit 1
 
 case init|--range|--autocenter ; wheel native
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|--autocenter ; wheel none
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|--autocenter ; wheel compat
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|--autocenter ; wheel ps4
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case init|--range|--autocenter ; wheel two
-err [THE VOID OBJECTS] A numeric --range value is required.
+err Error: A numeric --range value is required.
 exit 1
 
 case range ; wheel native
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range ; wheel none
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range ; wheel compat
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range ; wheel ps4
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range ; wheel two
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range|540 ; wheel native
@@ -895,34 +895,34 @@ enumerate g29
 open n1
 send n1 F8811C02000000
 close n1
-out PLEASE ACCEPT: steering range has been rewritten.
+out Steering range set.
 exit 0
 
 case range|540 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|540 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case range|540 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|540 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case range|39 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 40 and 900.
+err Error: Value must be between 40 and 900.
 err Parameter name: degrees
 err Actual value was 39.
 exit 1
@@ -930,28 +930,28 @@ exit 1
 case range|39 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|39 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case range|39 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|39 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case range|901 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 40 and 900.
+err Error: Value must be between 40 and 900.
 err Parameter name: degrees
 err Actual value was 901.
 exit 1
@@ -959,48 +959,48 @@ exit 1
 case range|901 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|901 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case range|901 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|901 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case range|x ; wheel native
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range|x ; wheel none
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range|x ; wheel compat
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range|x ; wheel ps4
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range|x ; wheel two
-err [THE VOID OBJECTS] A numeric degrees value is required.
+err Error: A numeric degrees value is required.
 exit 1
 
 case range|-5 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 40 and 900.
+err Error: Value must be between 40 and 900.
 err Parameter name: degrees
 err Actual value was -5.
 exit 1
@@ -1008,23 +1008,23 @@ exit 1
 case range|-5 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|-5 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case range|-5 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|-5 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case range|540|extra ; wheel native
@@ -1032,29 +1032,29 @@ enumerate g29
 open n1
 send n1 F8811C02000000
 close n1
-out PLEASE ACCEPT: steering range has been rewritten.
+out Steering range set.
 exit 0
 
 case range|540|extra ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|540|extra ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case range|540|extra ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case range|540|extra ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case autocenter|0 ; wheel native
@@ -1062,29 +1062,29 @@ enumerate g29
 open n1
 send n1 F5000000000000
 close n1
-out PLEASE ACCEPT: autocenter now obeys the new percentage.
+out Autocenter set.
 exit 0
 
 case autocenter|0 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|0 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case autocenter|0 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|0 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case autocenter|67 ; wheel native
@@ -1093,34 +1093,34 @@ open n1
 send n1 FE0D0606810000
 send n1 14000000000000
 close n1
-out PLEASE ACCEPT: autocenter now obeys the new percentage.
+out Autocenter set.
 exit 0
 
 case autocenter|67 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|67 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case autocenter|67 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|67 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case autocenter|101 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 0 and 100.
+err Error: Value must be between 0 and 100.
 err Parameter name: percent
 err Actual value was 101.
 exit 1
@@ -1128,28 +1128,28 @@ exit 1
 case autocenter|101 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|101 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case autocenter|101 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|101 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case autocenter|-1 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 0 and 100.
+err Error: Value must be between 0 and 100.
 err Parameter name: percent
 err Actual value was -1.
 exit 1
@@ -1157,43 +1157,43 @@ exit 1
 case autocenter|-1 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|-1 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case autocenter|-1 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case autocenter|-1 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case autocenter ; wheel native
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case autocenter ; wheel none
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case autocenter ; wheel compat
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case autocenter ; wheel ps4
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case autocenter ; wheel two
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case leds|0 ; wheel native
@@ -1201,29 +1201,29 @@ enumerate g29
 open n1
 send n1 F8120000000000
 close n1
-out THE FIVE TINY SUNS HAVE BEEN RECONFIGURED.
+out LEDs set.
 exit 0
 
 case leds|0 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case leds|0 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case leds|0 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case leds|0 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case leds|31 ; wheel native
@@ -1231,34 +1231,34 @@ enumerate g29
 open n1
 send n1 F8121F00000000
 close n1
-out THE FIVE TINY SUNS HAVE BEEN RECONFIGURED.
+out LEDs set.
 exit 0
 
 case leds|31 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case leds|31 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case leds|31 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case leds|31 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case leds|32 ; wheel native
 enumerate g29
-err [THE VOID OBJECTS] Value must be between 0 and 31.
+err Error: Value must be between 0 and 31.
 err Parameter name: mask
 err Actual value was 32.
 exit 1
@@ -1266,43 +1266,43 @@ exit 1
 case leds|32 ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case leds|32 ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case leds|32 ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case leds|32 ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case leds ; wheel native
-err [THE VOID OBJECTS] A numeric mask value is required.
+err Error: A numeric mask value is required.
 exit 1
 
 case leds ; wheel none
-err [THE VOID OBJECTS] A numeric mask value is required.
+err Error: A numeric mask value is required.
 exit 1
 
 case leds ; wheel compat
-err [THE VOID OBJECTS] A numeric mask value is required.
+err Error: A numeric mask value is required.
 exit 1
 
 case leds ; wheel ps4
-err [THE VOID OBJECTS] A numeric mask value is required.
+err Error: A numeric mask value is required.
 exit 1
 
 case leds ; wheel two
-err [THE VOID OBJECTS] A numeric mask value is required.
+err Error: A numeric mask value is required.
 exit 1
 
 case stop ; wheel native
@@ -1310,29 +1310,29 @@ enumerate g29
 open n1
 send n1 13000000000000
 close n1
-out FORCE EXORCISED. The wheel has been released.
+out Force stopped. The wheel has been released.
 exit 0
 
 case stop ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case stop ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case stop ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case stop ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case stop|now ; wheel native
@@ -1340,127 +1340,127 @@ enumerate g29
 open n1
 send n1 13000000000000
 close n1
-out FORCE EXORCISED. The wheel has been released.
+out Force stopped. The wheel has been released.
 exit 0
 
 case stop|now ; wheel none
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case stop|now ; wheel compat
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case stop|now ; wheel ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case stop|now ; wheel two
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case force ; wheel native
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force ; wheel none
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force ; wheel compat
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force ; wheel ps4
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force ; wheel two
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|10 ; wheel native
-err [THE VOID OBJECTS] The force test requires --i-understand. Keep hands clear of the wheel.
+err Error: The force test requires --i-understand. Keep hands clear of the wheel.
 exit 1
 
 case force|10 ; wheel none
-err [THE VOID OBJECTS] The force test requires --i-understand. Keep hands clear of the wheel.
+err Error: The force test requires --i-understand. Keep hands clear of the wheel.
 exit 1
 
 case force|10 ; wheel compat
-err [THE VOID OBJECTS] The force test requires --i-understand. Keep hands clear of the wheel.
+err Error: The force test requires --i-understand. Keep hands clear of the wheel.
 exit 1
 
 case force|10 ; wheel ps4
-err [THE VOID OBJECTS] The force test requires --i-understand. Keep hands clear of the wheel.
+err Error: The force test requires --i-understand. Keep hands clear of the wheel.
 exit 1
 
 case force|10 ; wheel two
-err [THE VOID OBJECTS] The force test requires --i-understand. Keep hands clear of the wheel.
+err Error: The force test requires --i-understand. Keep hands clear of the wheel.
 exit 1
 
 case force|26|--i-understand ; wheel native
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was 26.
 exit 1
 
 case force|26|--i-understand ; wheel none
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was 26.
 exit 1
 
 case force|26|--i-understand ; wheel compat
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was 26.
 exit 1
 
 case force|26|--i-understand ; wheel ps4
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was 26.
 exit 1
 
 case force|26|--i-understand ; wheel two
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was 26.
 exit 1
 
 case force|-26|--i-understand ; wheel native
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was -26.
 exit 1
 
 case force|-26|--i-understand ; wheel none
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was -26.
 exit 1
 
 case force|-26|--i-understand ; wheel compat
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was -26.
 exit 1
 
 case force|-26|--i-understand ; wheel ps4
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was -26.
 exit 1
 
 case force|-26|--i-understand ; wheel two
-err [THE VOID OBJECTS] The unverified hardware test is limited to -25 through 25 percent.
+err Error: The unverified hardware test is limited to -25 through 25 percent.
 err Parameter name: percent
 err Actual value was -26.
 exit 1
@@ -1478,7 +1478,7 @@ enumerate g29
 open n1
 send n1 13000000000000
 close n1
-out FORCE RITUAL COMPLETE. STOP REPORT SENT. Please continue possessing the wheel responsibly.
+out Force test complete. Stop report sent.
 exit 0
 
 case force|25|--i-understand|--milliseconds|50 ; wheel none
@@ -1486,13 +1486,13 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|25|--i-understand|--milliseconds|50 ; wheel compat
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case force|25|--i-understand|--milliseconds|50 ; wheel ps4
@@ -1500,13 +1500,13 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|25|--i-understand|--milliseconds|50 ; wheel two
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case force|-25|--milliseconds|50|--i-understand ; wheel native
@@ -1522,7 +1522,7 @@ enumerate g29
 open n1
 send n1 13000000000000
 close n1
-out FORCE RITUAL COMPLETE. STOP REPORT SENT. Please continue possessing the wheel responsibly.
+out Force test complete. Stop report sent.
 exit 0
 
 case force|-25|--milliseconds|50|--i-understand ; wheel none
@@ -1530,13 +1530,13 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|-25|--milliseconds|50|--i-understand ; wheel compat
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case force|-25|--milliseconds|50|--i-understand ; wheel ps4
@@ -1544,71 +1544,71 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|-25|--milliseconds|50|--i-understand ; wheel two
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case force|10|--milliseconds|49|--i-understand ; wheel native
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 49.
 exit 1
 
 case force|10|--milliseconds|49|--i-understand ; wheel none
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 49.
 exit 1
 
 case force|10|--milliseconds|49|--i-understand ; wheel compat
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 49.
 exit 1
 
 case force|10|--milliseconds|49|--i-understand ; wheel ps4
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 49.
 exit 1
 
 case force|10|--milliseconds|49|--i-understand ; wheel two
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 49.
 exit 1
 
 case force|10|--milliseconds|5001|--i-understand ; wheel native
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 5001.
 exit 1
 
 case force|10|--milliseconds|5001|--i-understand ; wheel none
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 5001.
 exit 1
 
 case force|10|--milliseconds|5001|--i-understand ; wheel compat
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 5001.
 exit 1
 
 case force|10|--milliseconds|5001|--i-understand ; wheel ps4
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 5001.
 exit 1
 
 case force|10|--milliseconds|5001|--i-understand ; wheel two
-err [THE VOID OBJECTS] Duration must be between 50 and 5000 milliseconds.
+err Error: Duration must be between 50 and 5000 milliseconds.
 err Parameter name: milliseconds
 err Actual value was 5001.
 exit 1
@@ -1626,7 +1626,7 @@ enumerate g29
 open n1
 send n1 13000000000000
 close n1
-out FORCE RITUAL COMPLETE. STOP REPORT SENT. Please continue possessing the wheel responsibly.
+out Force test complete. Stop report sent.
 exit 0
 
 case force|10|--I-UNDERSTAND|--milliseconds|50 ; wheel none
@@ -1634,13 +1634,13 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|10|--I-UNDERSTAND|--milliseconds|50 ; wheel compat
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case force|10|--I-UNDERSTAND|--milliseconds|50 ; wheel ps4
@@ -1648,73 +1648,73 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|10|--I-UNDERSTAND|--milliseconds|50 ; wheel two
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case force|10|--i-understand|--bogus ; wheel native
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case force|10|--i-understand|--bogus ; wheel none
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case force|10|--i-understand|--bogus ; wheel compat
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case force|10|--i-understand|--bogus ; wheel ps4
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case force|10|--i-understand|--bogus ; wheel two
-err [THE VOID OBJECTS] Unknown option '--bogus'.
+err Error: Unknown option '--bogus'.
 exit 1
 
 case force|x|--i-understand ; wheel native
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|x|--i-understand ; wheel none
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|x|--i-understand ; wheel compat
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|x|--i-understand ; wheel ps4
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|x|--i-understand ; wheel two
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|--i-understand|10 ; wheel native
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|--i-understand|10 ; wheel none
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|--i-understand|10 ; wheel compat
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|--i-understand|10 ; wheel ps4
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|--i-understand|10 ; wheel two
-err [THE VOID OBJECTS] A numeric percent value is required.
+err Error: A numeric percent value is required.
 exit 1
 
 case force|0|--milliseconds|50|--i-understand ; wheel native
@@ -1730,7 +1730,7 @@ enumerate g29
 open n1
 send n1 13000000000000
 close n1
-out FORCE RITUAL COMPLETE. STOP REPORT SENT. Please continue possessing the wheel responsibly.
+out Force test complete. Stop report sent.
 exit 0
 
 case force|0|--milliseconds|50|--i-understand ; wheel none
@@ -1738,13 +1738,13 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|0|--milliseconds|50|--i-understand ; wheel compat
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case force|0|--milliseconds|50|--i-understand ; wheel ps4
@@ -1752,33 +1752,33 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|0|--milliseconds|50|--i-understand ; wheel two
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1
 
 case force|10|--milliseconds|--i-understand ; wheel native
-err [THE VOID OBJECTS] A numeric --milliseconds value is required.
+err Error: A numeric --milliseconds value is required.
 exit 1
 
 case force|10|--milliseconds|--i-understand ; wheel none
-err [THE VOID OBJECTS] A numeric --milliseconds value is required.
+err Error: A numeric --milliseconds value is required.
 exit 1
 
 case force|10|--milliseconds|--i-understand ; wheel compat
-err [THE VOID OBJECTS] A numeric --milliseconds value is required.
+err Error: A numeric --milliseconds value is required.
 exit 1
 
 case force|10|--milliseconds|--i-understand ; wheel ps4
-err [THE VOID OBJECTS] A numeric --milliseconds value is required.
+err Error: A numeric --milliseconds value is required.
 exit 1
 
 case force|10|--milliseconds|--i-understand ; wheel two
-err [THE VOID OBJECTS] A numeric --milliseconds value is required.
+err Error: A numeric --milliseconds value is required.
 exit 1
 
 case force|10|--i-understand|stray|--milliseconds|50 ; wheel native
@@ -1794,7 +1794,7 @@ enumerate g29
 open n1
 send n1 13000000000000
 close n1
-out FORCE RITUAL COMPLETE. STOP REPORT SENT. Please continue possessing the wheel responsibly.
+out Force test complete. Stop report sent.
 exit 0
 
 case force|10|--i-understand|stray|--milliseconds|50 ; wheel none
@@ -1802,13 +1802,13 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
+err Error: No Logitech G29 was found. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|10|--i-understand|stray|--milliseconds|50 ; wheel compat
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] The G29 is in compatibility mode. Run 'g29ctl init' first.
+err Error: The G29 is in compatibility mode. Run 'g29ctl init' first.
 exit 1
 
 case force|10|--i-understand|stray|--milliseconds|50 ; wheel ps4
@@ -1816,11 +1816,11 @@ enumerate g29
 enumerate ps4
 enumerate g29
 enumerate ps4
-err [THE VOID OBJECTS] The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
+err Error: The G29 is in PS4 mode (PID C260), which this tool cannot configure. Set the selector to PS3 and reconnect USB.
 exit 1
 
 case force|10|--i-understand|stray|--milliseconds|50 ; wheel two
 enumerate g29
 enumerate g29
-err [THE VOID OBJECTS] More than one G29 was found. Leave only the target wheel connected.
+err Error: More than one G29 was found. Leave only the target wheel connected.
 exit 1

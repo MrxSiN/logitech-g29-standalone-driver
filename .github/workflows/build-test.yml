@@ -1,0 +1,68 @@
+name: build-test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Visual Studio (C++ workload with AddressSanitizer) and the .NET Framework
+    # compiler are on the image. No G29, G HUB, administrator rights or machine
+    # changes are needed.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Validates src/brainfuck/g29-main.bf (only the eight commands, balanced
+      # brackets), compiles it ahead of time, builds x64 g29ctl.exe and
+      # g29ffb64.dll and x86 g29ffb32.dll (Release, /W4 /WX), checks the
+      # mitigations, runs /analyze on x64 and x86, the C# suite on the
+      # reference interpreter and the compiled program, the whole suite again
+      # under AddressSanitizer, the x64 and x86 DirectInput smoke clients,
+      # and the install transaction with failure injection.
+      - name: Build and test
+        shell: powershell
+        run: .\test.ps1 -Sanitize -Analyze
+
+      # Compiled program on recorded scenario workloads (docs/PERFORMANCE.md).
+      - name: Benchmark
+        shell: powershell
+        run: .\artifacts\bin\G29.Tests.exe --benchmark
+
+      # A clean rebuild of one commit must be byte-identical (/Brepro).
+      - name: Reproducible build
+        shell: powershell
+        run: |
+          $first = Get-FileHash artifacts\bin\g29ctl.exe, artifacts\bin\g29ffb64.dll, artifacts\bin\g29ffb32.dll | ForEach-Object Hash
+          .\build.ps1 -Clean
+          $second = Get-FileHash artifacts\bin\g29ctl.exe, artifacts\bin\g29ffb64.dll, artifacts\bin\g29ffb32.dll | ForEach-Object Hash
+          if (Compare-Object $first $second) { throw 'The build is not reproducible.' }
+
+      - name: PowerShell analysis
+        shell: powershell
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -RequiredVersion 1.22.0
+          $findings = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
+          $findings | Format-Table -AutoSize | Out-String | Write-Host
+          if ($findings) { throw "$(@($findings).Count) PowerShell analysis errors." }
+
+      - name: Release manifest
+        shell: powershell
+        run: .\tools\New-ReleaseManifest.ps1
+
+      - name: Release binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g29-standalone-bin
+          path: |
+            artifacts/bin/g29ctl.exe
+            artifacts/bin/g29ffb64.dll
+            artifacts/bin/g29ffb32.dll
+            artifacts/release/SHA256SUMS
+            artifacts/release/release-manifest.json
+          if-no-files-found: error

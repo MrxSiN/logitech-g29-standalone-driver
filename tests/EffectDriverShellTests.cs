@@ -27,7 +27,7 @@ namespace G29.Tests
 
         private static void SerializationMatchesTheReaderVectors()
         {
-            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
             harness.Post(BfMainTests.Boot(4));
             harness.Run();
             ushort sequence = 0;

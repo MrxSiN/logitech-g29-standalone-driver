@@ -14,7 +14,7 @@ namespace G29.Tests
             var stopwatch = Stopwatch.StartNew();
             var engine = new ProgramEngine();
             ReferenceReplay.Engine(delegate { engine.Boot(); return engine; }, 1);
-            Console.WriteLine("  engine transcripts: {0} ms, {1} force samples, worst force step {2} VM steps", stopwatch.ElapsedMilliseconds, engine.ForceSamples, engine.WorstForceSteps);
+            Console.WriteLine("  engine transcripts: {0} ms, {1} force samples, worst force step {2} loop iterations", stopwatch.ElapsedMilliseconds, engine.ForceSamples, engine.WorstForceIterations);
         }
 
         // One Brainfuck program per scenario, driven through EV_TEST 'G'.
@@ -25,11 +25,11 @@ namespace G29.Tests
 
             internal int ForceSamples { get; private set; }
 
-            internal long WorstForceSteps { get; private set; }
+            internal long WorstForceIterations { get; private set; }
 
             internal void Boot()
             {
-                harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+                harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
                 harness.Post(BfMainTests.Boot(4));
                 harness.Run();
             }
@@ -164,13 +164,13 @@ namespace G29.Tests
                 Signed(writer, position);
                 Signed(writer, velocity);
                 Signed(writer, acceleration);
-                long before = harness.Machine.TotalSteps;
+                long before = harness.Machine.TotalIterations;
                 byte[] answer = Call('f', writer);
-                long steps = harness.Machine.TotalSteps - before;
+                long steps = harness.Machine.TotalIterations - before;
                 ForceSamples++;
-                if (steps > WorstForceSteps)
+                if (steps > WorstForceIterations)
                 {
-                    WorstForceSteps = steps;
+                    WorstForceIterations = steps;
                 }
 
                 return (int)Value(answer);

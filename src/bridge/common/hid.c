@@ -61,6 +61,9 @@ void hid_free(hid_bridge *hid)
         return;
     }
 
+    /* entries below count are set (analysis warning C6001 does not see it) */
+#pragma warning(push)
+#pragma warning(disable: 6001)
     for (index = 0; index < hid->count; index++) {
         if (hid->entries[index].reader) {
             reader_free(hid->entries[index].reader);
@@ -72,6 +75,7 @@ void hid_free(hid_bridge *hid)
 
         free(hid->entries[index].info.path);
     }
+#pragma warning(pop)
 
     free(hid->entries);
     DeleteCriticalSection(&hid->lock);

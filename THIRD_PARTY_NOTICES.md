@@ -1,7 +1,8 @@
 # Third-party notices
 
-Logitech wheel commands and device-identification rules in
-`src/G29.Core/Protocol/G29Protocol.cs` derive from the Linux kernel
+Logitech wheel commands and device-identification rules in the Brainfuck
+program `src/brainfuck/g29-main.bf` (ported from the former C#
+`G29Protocol.cs`, see `docs/PROTOCOL.md`) derive from the Linux kernel
 `drivers/hid/hid-lg4ff.c` implementation.
 
 - Project: Linux kernel

@@ -3,23 +3,30 @@
  * performs the generic commands it issues (console text, HID, timers, registry,
  * processes, shared memory, the Service Control Manager connection, event-log
  * text, exit). It decides nothing about commands, devices or messages.
- * Port of CliBridge.cs and BridgeService.cs.
  */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../common/bfvm.h"
+#include "../common/bfrt.h"
 #include "../common/frames.h"
 #include "../common/guard.h"
 #include "../common/hid.h"
-#include "../common/program.h"
+#include "../common/lease.h"
 #include "../common/session.h"
 #include "../common/system.h"
 
 #define ROLE_CLI 1
 #define CLI_FORCE_CEILING_PERCENT 25
+/* The diagnostic force lasts at most 5000 ms; the lease allows timer and write
+   latency on top and then stops the wheel whatever the program does. */
+#define CLI_FORCE_HOLD_LIMIT_MS 6000
+/* Input unread this long while a force is held means the program is stuck. */
+#define FORCE_STALL_LIMIT_MS 1000
+/* The service never applies force: its guard admits only a zero force. */
+#define SERVICE_FORCE_CEILING_PERCENT 0
+#define SERVICE_NAME_LIMIT 64
 #define TEXT_CLIP 1000
 #define PENDING_TEXT_LIMIT 32000
 #define SERVICE_STOP_WAIT 10000
@@ -28,6 +35,7 @@ typedef struct {
     g29_session *session;
     hid_bridge *hid;
     output_guard *guard;
+    force_lease *lease;
     shared_memory *shm;
     HANDLE finished;
     HANDLE service_requested;
@@ -410,7 +418,15 @@ static int on_command(void *context, const g29_frame *frame, char *error, size_t
     case 0xB7: {
         wchar_t *name = pr_text(&r);
         if (!name || !pr_end(&r) || !*name) { free(name); VIOLATION("A service needs a name."); }
-        free(app.service_name);
+        if (wcslen(name) > SERVICE_NAME_LIMIT || wcsspn(name, L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != wcslen(name)) {
+            free(name);
+            VIOLATION("A service name may only use letters, digits and underscores.");
+        }
+
+        if (app.service_name) { free(name); VIOLATION("The service was already requested."); }
+        /* a service host never pushes the wheel */
+        guard_lower_ceiling(app.guard, SERVICE_FORCE_CEILING_PERCENT);
+        guard_emergency_stop(app.guard);
         app.service_name = name;
         SetEvent(app.service_requested);
         return 0;
@@ -453,11 +469,11 @@ static int on_command(void *context, const g29_frame *frame, char *error, size_t
     case 0xCA: {
         uint32_t handle = pr_u32(&r), offset = pr_u32(&r);
         unsigned int length = pr_u16(&r);
-        uint8_t data[FRAME_MAX_PAYLOAD];
         if (!pr_end(&r) || length > FRAME_MAX_PAYLOAD - 4) VIOLATION("Malformed shared-memory read.");
-        if (shm_read(app.shm, handle, offset, data, length) != 0) VIOLATION("Shared memory read outside the mapping.");
         pw_u32(&w, 0);
-        pw_bytes(&w, data, length);
+        /* read straight into the answer, after its status */
+        if (shm_read(app.shm, handle, offset, w.data + w.length, length) != 0) VIOLATION("Shared memory read outside the mapping.");
+        w.length += length;
         post(0x33, frame->sequence, &w);
         return 0;
     }
@@ -486,10 +502,16 @@ static int on_command(void *context, const g29_frame *frame, char *error, size_t
 static void on_failure(void *context, const char *message)
 {
     (void)context;
-    guard_emergency_stop(app.guard);
+    guard_trip(app.guard);
     strncpy(app.failure, message, sizeof(app.failure) - 1);
     InterlockedExchange(&app.failed, 1);
     SetEvent(app.finished);
+}
+
+static void on_lease_expired(void *context, const char *reason)
+{
+    (void)context;
+    session_abort(app.session, reason);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -572,17 +594,11 @@ static BOOL WINAPI console_control(DWORD type)
 
 int wmain(int argc, wchar_t **argv)
 {
-    const bf_program *program;
-    char error[256];
     payload_writer boot;
     HANDLE waits[2];
     int index, result;
-    program = program_shared(NULL, error, sizeof(error));
-    if (!program) {
-        fprintf(stderr, "[THE VOID OBJECTS] %s\n", error);
-        return 1;
-    }
-
+    /* the service runs as LocalSystem: later DLL loads come from System32 only */
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     memset(&app, 0, sizeof(app));
     app.exit_code = 1;
     InitializeCriticalSection(&app.timer_lock);
@@ -592,9 +608,9 @@ int wmain(int argc, wchar_t **argv)
     app.finished = CreateEventW(NULL, TRUE, FALSE, NULL);
     app.service_requested = CreateEventW(NULL, TRUE, FALSE, NULL);
     app.service_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
-    app.session = session_create(program, on_command, on_failure, NULL, BF_DEFAULT_STEP_BUDGET);
+    app.session = session_create(g29_program_run, on_command, on_failure, NULL, BF_DEFAULT_ITERATION_BUDGET);
     if (!app.hid || !app.guard || !app.shm || !app.finished || !app.service_requested || !app.service_stop || !app.session) {
-        fprintf(stderr, "[THE VOID OBJECTS] Out of memory.\n");
+        fprintf(stderr, "Error: Out of memory.\n");
         return 1;
     }
 
@@ -609,13 +625,23 @@ int wmain(int argc, wchar_t **argv)
     }
 
     if (boot.overflow) {
-        fprintf(stderr, "[THE VOID OBJECTS] The command line is too long.\n");
+        fprintf(stderr, "Error: The command line is too long.\n");
+        return 1;
+    }
+
+    app.lease = lease_start(app.guard, app.session, CLI_FORCE_HOLD_LIMIT_MS, FORCE_STALL_LIMIT_MS, on_lease_expired, NULL);
+    if (!app.lease) {
+        fprintf(stderr, "Error: The force lease could not be started.\n");
         return 1;
     }
 
     SetConsoleCtrlHandler(console_control, TRUE);
     session_post(app.session, 0x01, 0, boot.data, boot.length);
-    session_start(app.session);
+    if (!session_start(app.session)) {
+        guard_trip(app.guard);
+        fprintf(stderr, "Error: The program thread could not be started.\n");
+        return 1;
+    }
     waits[0] = app.finished;
     waits[1] = app.service_requested;
     if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0 + 1 && !app.failed) {
@@ -638,13 +664,18 @@ int wmain(int argc, wchar_t **argv)
 
     WaitForSingleObject(app.finished, INFINITE);
     session_stop(app.session);
-    session_join(app.session, 2000);
+    if (!session_join(app.session, 2000)) {
+        /* the program is stuck in a host call or a loop: no more force */
+        guard_trip(app.guard);
+    }
+
+    lease_stop(app.lease);
     SetConsoleCtrlHandler(console_control, FALSE);
     timers_close();
     if (app.failed) {
         wchar_t message[600];
         guard_emergency_stop(app.guard);
-        swprintf(message, sizeof(message) / sizeof(message[0]), L"[THE VOID OBJECTS] The Brainfuck program failed: %hs", app.failure);
+        swprintf(message, sizeof(message) / sizeof(message[0]), L"Error: The Brainfuck program failed: %hs", app.failure);
         console_line(STD_ERROR_HANDLE, message);
         result = 1;
     } else {

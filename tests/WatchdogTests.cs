@@ -4,7 +4,7 @@ using G29.Bridge.Runtime;
 
 namespace G29.Tests
 {
-    // The force-feedback crash watchdog in Brainfuck (watchdog.bfa): the rule
+    // The force-feedback crash watchdog in the Brainfuck program: the rule
     // against the frozen ForceWatchdog vectors (tests/reference/watchdog.txt), and
     // the service's heartbeat mapping, checks and stop against a fake bridge.
     internal static class WatchdogTests
@@ -22,7 +22,7 @@ namespace G29.Tests
 
         private static void RuleMatchesTheVectors()
         {
-            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
             harness.Post(BfMainTests.Boot(4));
             harness.Run();
             ushort sequence = 0;

@@ -1,11 +1,13 @@
 # Tape map
 
-`layout.bfa` is the authoritative declaration; this file explains it. Addresses
-change only deliberately, together with both files.
+Documentation of the tape layout of `g29-main.bf`. The program is the
+authority; this file describes it and is not a source from which anything is
+generated. The names in backticks are labels for documentation and
+discussion only; they do not appear in the program. Update this file whenever
+an edit to the program moves or repurposes cells.
 
-The VM tape has 131072 cells. The program uses the low end so pointer moves
-(and the generated file) stay small; everything above the highest declared
-region is reserve.
+The tape has 131072 cells. The program uses the low end so pointer moves stay
+short; everything above the highest listed region is reserve.
 
 ## Rules
 
@@ -14,11 +16,8 @@ region is reserve.
   a sign cell (0 = non-negative, 1 = negative) plus a magnitude cell (and, for
   command-line integers, a flag for the one value, -2147483648, whose magnitude
   does not fit a cell).
-- Each region that runs helpers has a nearby scratch pool. The assembler hands
-  `local` cells out of the pool closest to the data pointer, as a stack. A
-  `local` cell is zero when its scope starts and must be zero when it ends.
-- Helper contracts (inputs, outputs, consumed cells, scratch) are documented
-  above each macro in `lib/*.bfa`. Exit pointers are tracked by the assembler.
+- Each region that runs helper code has a nearby scratch pool. Scratch cells
+  are zero when a helper starts using them and zero again when it is done.
 - Frequently used state lives below cell 700: every access from far away costs
   program size, because Brainfuck has no addressing mode.
 
@@ -27,7 +26,7 @@ region is reserve.
 | Cells | Name | Contents |
 |---|---|---|
 | 0..15 | current frame | raw header (`fr_magic` .. `fr_len_hi`), `fr_len`, `fr_rem` (payload bytes still unread), `fr_bad`, `fr_short`, `handled` |
-| 16..47 | program state | `running`, `booted`, `role`, `test_counter`, `svc` (the continuation the shared services run next, `g29-main.bfa`) |
+| 16..47 | program state | `running`, `booted`, `role`, `test_counter`, `svc` (the continuation the shared services run next) |
 | 48..191 | scratch A | frame layer and dispatcher |
 | 192..215 | protocol | `pr_arg1..4` (inputs), `pr_flags` (identification), `pr_count` (reports produced), `pr_status`, `test_sel`, `rpt[14]` (two 7-byte reports) |
 | 216..319 | scratch B | protocol helpers |
@@ -53,7 +52,7 @@ region is reserve.
 Byte `k` of the buffer in lane `j` is cell `1012 + j + 12k`. Row -1
 (1000..1011) is a permanently zero sentinel row and row 256 (4084..4095) a zero
 guard row, so a buffer can be printed by scanning. Bytes are stored as
-`byte + 1`, newest first (`lib/print.bfa`). Interleaving keeps copies and
+`byte + 1`, newest first. Interleaving keeps copies and
 comparisons between buffers lane-local, which keeps the program small.
 
 | Lane | Buffer |
@@ -73,8 +72,7 @@ comparisons between buffers lane-local, which keeps the program small.
 ## Effect records
 
 Record `k` (0..32) starts at cell `4608 + 256k`. Record 32 is the terminator
-(its `more` cell is 0). Field offsets are the `FX_*`, `W_*` and `C_*` constants
-in `engine.bfa`:
+(its `more` cell is 0). Field offsets:
 
 | Offsets | Contents |
 |---|---|
@@ -88,6 +86,5 @@ in `engine.bfa`:
 Every engine operation is one walk: the carry block is filled at record 0,
 carried forward to the terminator (each record runs the same code on its own
 cells), then carried back to record 0 where the results are read. The record
-code is assembled with record-relative addresses (a virtual origin at 100000),
-which is why the assembler reports a highest cell above 100000; the real tape
-stops at 13055.
+code addresses cells relative to the record it runs in, so the same code
+serves every record. The highest cell the program uses is 13055.

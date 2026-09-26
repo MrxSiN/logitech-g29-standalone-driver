@@ -32,66 +32,9 @@ namespace G29.Tests
 
         internal static void Run()
         {
-            AssembledProgramIsCurrent();
             TestRole();
             MalformedFrames();
             OtherRoles();
-        }
-
-        private static void AssembledProgramIsCurrent()
-        {
-            var assembler = new BfAsm.Assembler();
-            assembler.AssembleFile(Path.Combine(RepositoryRoot, @"src\brainfuck\g29-main.bfa"));
-            string committed = File.ReadAllText(Path.Combine(RepositoryRoot, @"src\brainfuck\g29-main.bf"));
-            Assert.True(assembler.Output == committed, "g29-main.bf matches its assembly source; run bf.ps1");
-            IDictionary<string, int> idioms = Program.IdiomsByName();
-            Assert.True(idioms.ContainsKey("race") && idioms.ContainsKey("divmod"), "the VM recognizes the library loops in the real program");
-            Assert.True(Program.MulAddCount > 0, "multiply-add loops are recognized");
-
-            AssemblerRejects("@0 [ > ]", "an unbalanced loop");
-            AssemblerRejects("@0 [! > ] @0", "moving by name after an unbalanced loop");
-            AssemblerRejects("@0 <", "moving below cell 0");
-            AssemblerRejects("macro m(a) { @a } m(1, 2)", "wrong argument count");
-            AssemblerRejects("local t { }", "locals without a scratch pool");
-            AssemblerRejects("macro m() { m() } m()", "recursive macros");
-            Assert.True(Assemble("scratch 10 to 12\nmacro z(x) { @x [-] }\nlocal a, b { z(b) } @0 [! > ] assume @3 +") == "\n>>>>>>>>>>>[-]<<<<<<<<<<<[>]+\n".TrimStart('\n'), "assembler output");
-            foreach (char c in committed)
-            {
-                if ("+-<>[].,".IndexOf(c) < 0 && (c == '\0'))
-                {
-                    throw new InvalidOperationException("Unexpected character in g29-main.bf");
-                }
-            }
-        }
-
-        private static string Assemble(string source)
-        {
-            string path = Path.Combine(Path.GetTempPath(), "g29-bfasm-test-" + Guid.NewGuid().ToString("N") + ".bfa");
-            File.WriteAllText(path, source);
-            try
-            {
-                var assembler = new BfAsm.Assembler();
-                assembler.AssembleFile(path);
-                return assembler.Output;
-            }
-            finally
-            {
-                File.Delete(path);
-            }
-        }
-
-        private static void AssemblerRejects(string source, string name)
-        {
-            try
-            {
-                Assemble(source);
-            }
-            catch (BfAsm.AsmException)
-            {
-                return;
-            }
-
-            throw new InvalidOperationException("Assertion failed: the assembler accepted " + name);
         }
 
         internal static Frame Boot(int role, params string[] arguments)
@@ -107,7 +50,7 @@ namespace G29.Tests
 
         private static void TestRole()
         {
-            var harness = new BfHarness(Program, BfVm.DefaultStepBudget);
+            var harness = new BfHarness(Program, BfVm.DefaultIterationBudget);
             harness.Post(Boot(4, "ignored", "arguments"));
             IList<Frame> boot = harness.Run();
             Assert.Equal(1, boot.Count, "boot answers once");
@@ -146,7 +89,7 @@ namespace G29.Tests
             Expect(shutdown[0], 0x80, 0, new byte[] { 0, 0, 0, 0 }, "shutdown exits with status 0");
             Assert.True(harness.Ended, "the program ends after CMD_EXIT");
 
-            var early = new BfHarness(Program, BfVm.DefaultStepBudget);
+            var early = new BfHarness(Program, BfVm.DefaultIterationBudget);
             early.Post(new Frame(0x05, 0, 3, new byte[] { 1 }));
             early.Post(Boot(4));
             IList<Frame> beforeBoot = early.Run();
@@ -163,7 +106,7 @@ namespace G29.Tests
                 new byte[] { 0xA5, 1, 0x05, 0, 0, 0, 0x01, 0x10 }
             })
             {
-                var harness = new BfHarness(Program, BfVm.DefaultStepBudget);
+                var harness = new BfHarness(Program, BfVm.DefaultIterationBudget);
                 harness.Post(Boot(4));
                 harness.Run();
                 harness.PostBytes(bad);
@@ -178,7 +121,7 @@ namespace G29.Tests
 
         private static void OtherRoles()
         {
-            var harness = new BfHarness(Program, BfVm.DefaultStepBudget);
+            var harness = new BfHarness(Program, BfVm.DefaultIterationBudget);
             harness.Post(Boot(2));
             IList<Frame> frames = harness.Run();
             Assert.Equal(0x81, frames[0].Type, "unmigrated role is logged");

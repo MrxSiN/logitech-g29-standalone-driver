@@ -4,7 +4,7 @@ using G29.Bridge.Runtime;
 
 namespace G29.Tests
 {
-    // Role DIRECTINPUT (src/brainfuck/directinput.bfa) against a frame-level fake of
+    // Role DIRECTINPUT of src/brainfuck/g29-main.bf against a frame-level fake of
     // the COM shell and its HID/shared-memory/timer mechanisms. Expected results
     // follow the legacy G29EffectDriver/ForceFeedbackSession.
     internal static class DirectInputTests
@@ -27,7 +27,7 @@ namespace G29.Tests
             ConditionEffectUsesSteering();
             DeviceLost();
             Polling();
-            Console.WriteLine("  DirectInput role: worst force tick {0} VM steps", Fake.WorstTick);
+            Console.WriteLine("  DirectInput role: worst force tick {0} loop iterations", Fake.WorstTick);
         }
 
         private static void NoSession()
@@ -304,7 +304,7 @@ namespace G29.Tests
                 PollValue = 32767;
                 Commands = new List<Frame>();
                 Writes = new List<byte[]>();
-                harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+                harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
                 harness.OnCommand = OnCommand;
                 harness.Post(BfMainTests.Boot(3));
                 harness.Run();
@@ -441,9 +441,9 @@ namespace G29.Tests
             {
                 clock = now;
                 harness.Post(new Frame(0x02, 0, 0, new PayloadWriter().U8(1).U64(now).U64(now / 1000).ToArray()));
-                long before = harness.Machine.TotalSteps;
+                long before = harness.Machine.TotalIterations;
                 harness.Run();
-                WorstTick = Math.Max(WorstTick, harness.Machine.TotalSteps - before);
+                WorstTick = Math.Max(WorstTick, harness.Machine.TotalIterations - before);
             }
 
             internal void Input(uint value, long now)

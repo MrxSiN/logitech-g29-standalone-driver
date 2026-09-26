@@ -33,7 +33,7 @@ namespace G29.Tests
                 {
                     case "axis":
                     {
-                        harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+                        harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
                         harness.Post(BfMainTests.Boot(4));
                         harness.Run();
                         var arguments = new PayloadWriter();
@@ -52,10 +52,10 @@ namespace G29.Tests
 
                     case "sample":
                     {
-                        long before = harness.Machine.TotalSteps;
+                        long before = harness.Machine.TotalIterations;
                         Call(harness, ref sequence, 's', new PayloadWriter().U64(long.Parse(parts[1])).U32(long.Parse(parts[2])), 1);
                         lastSample = long.Parse(parts[1]);
-                        worstSample = Math.Max(worstSample, harness.Machine.TotalSteps - before);
+                        worstSample = Math.Max(worstSample, harness.Machine.TotalIterations - before);
                         break;
                     }
 
@@ -106,7 +106,7 @@ namespace G29.Tests
             }
 
             Assert.True(checkedLines > 300, "steering fixture covers the recorded traces");
-            Console.WriteLine("  steering vectors: {0} lines, {1} motions off by one, {2} at the 50 ms boundary, worst sample {3} VM steps, {4} ms", checkedLines, inexact, boundaries, worstSample, stopwatch.ElapsedMilliseconds);
+            Console.WriteLine("  steering vectors: {0} lines, {1} motions off by one, {2} at the 50 ms boundary, worst sample {3} loop iterations, {4} ms", checkedLines, inexact, boundaries, worstSample, stopwatch.ElapsedMilliseconds);
         }
 
         private static PayloadWriter Signed(PayloadWriter writer, long value)

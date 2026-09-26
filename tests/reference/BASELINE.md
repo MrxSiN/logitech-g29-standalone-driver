@@ -6,7 +6,7 @@ implementation at git commit `c1813a0` passed `test.ps1`.
 The fixtures in this directory were produced once by `reference.ps1`
 (`tools/G29.Reference`) from that legacy implementation. They are the oracle
 for every later phase and are not edited by hand. The test suite replays every
-one of them against the Brainfuck program (see `MIGRATION.md`). The generator
+one of them against the Brainfuck program. The generator
 and the legacy implementation were deleted in migration phase 14; check out the
 phase 0 commit to run them again.
 
@@ -49,3 +49,15 @@ f16ff92e3bb1ae337cc0790d35a19fdf391878856b059fe3a989e410501f7f64  tests/referenc
 Not captured automatically (needs the real machine; covered later by bridge
 tests and physical validation): `doctor` output, `watch`/`service` loops,
 real registry/SCM effects, real HID timing.
+
+## Deliberate changes after phase 0
+
+2026-09-26: message text only. Novelty wording in the program's output was
+replaced by plain messages, in the program and in these fixtures together
+(`cli.txt`, `registration.txt`). No exit code, report, registry value or
+decision changed. Replacements: the error prefix `[THE VOID OBJECTS] ` is now
+`Error: `; the help header and `AVAILABLE INCANTATIONS:` are now
+`G29 Standalone: Logitech G29 controller without G HUB` and `Commands:`; the
+status, range, autocenter, LED, force, init, watch, registration and doctor
+confirmations, and the service display name and description, are now plain
+sentences (`CHANGELOG.md` lists them).

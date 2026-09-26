@@ -2,8 +2,8 @@
  * Generic registry, file, process, host, clock and shared-memory mechanisms for
  * the Brainfuck program (ABI.md). Every key path, name, value and decision
  * comes from the program; these functions perform the operation and report
- * what Windows answered. Port of SystemBridge.cs, SharedMemoryBridge.cs and
- * HostClock.cs.
+ * what Windows answered. The one limit is the capability boundary of
+ * system_registry_writable.
  */
 #ifndef G29_SYSTEM_H
 #define G29_SYSTEM_H
@@ -20,7 +20,10 @@ int64_t clock_tick_milliseconds(void);
 void system_host_info(void *module, payload_writer *out);
 
 /* One registry command (0xB0..0xB5): reads its request, writes the
-   EV_REG_RESULT payload. Returns 0, or non-zero on an ABI violation. */
+   EV_REG_RESULT payload. Returns 0, or non-zero on an ABI violation. Commands
+   that change the registry are an ABI violation outside the keys
+   system_registry_writable allows. */
+int system_registry_writable(const wchar_t *path);
 int system_registry(uint8_t type, payload_reader *request, payload_writer *out, char *error, size_t error_length);
 
 /* CMD_FILE_INFO: status (0 exists, else a Win32 error) and two texts that are

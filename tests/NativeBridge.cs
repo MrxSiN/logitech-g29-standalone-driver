@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace G29.Tests
 {
     // The native bridge's emergency guard and shared memory
-    // (src/bridge/common/guard.c, system.c) through the test-only g29testvm.dll.
+    // (src/bridge/common/guard.c, system.c) through the test-only g29testhost.dll.
     internal sealed class NativeGuard : IDisposable
     {
         private readonly GuardWriter writer;
@@ -46,6 +46,39 @@ namespace G29.Tests
             bft_guard_stop(guard);
         }
 
+        internal IntPtr Handle
+        {
+            get { return guard; }
+        }
+
+        // 0, or -1 when the guard refuses (a raise or an impossible value).
+        internal int Lower(int ceilingPercent)
+        {
+            return bft_guard_lower(guard, ceilingPercent);
+        }
+
+        internal void Trip()
+        {
+            bft_guard_trip(guard);
+        }
+
+        // Replaces the guard's clock with a fixed time (ms).
+        internal void FakeClock(long now)
+        {
+            bft_guard_fake_clock(guard, now);
+        }
+
+        internal long HeldMs(long now)
+        {
+            return bft_guard_held(guard, now);
+        }
+
+        // lease_evaluate: 0 holds, 1 hold limit, 2 stalled program.
+        internal int Evaluate(IntPtr session, int maxHoldMs, int stallMs, long now)
+        {
+            return bft_lease_evaluate(guard, session, maxHoldMs, stallMs, now);
+        }
+
         public void Dispose()
         {
             if (guard != IntPtr.Zero)
@@ -55,23 +88,38 @@ namespace G29.Tests
             }
         }
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern IntPtr bft_guard_create(int ceilingPercent, GuardWriter writer);
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern int bft_guard_check(IntPtr guard, byte[] payload, int length);
 
-        [DllImport("g29testvm.dll", CharSet = CharSet.Unicode)]
+        [DllImport("g29testhost.dll", CharSet = CharSet.Unicode)]
         private static extern void bft_guard_written(IntPtr guard, string path, int outputLength, byte[] payload, int length);
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern int bft_guard_any(IntPtr guard);
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern void bft_guard_stop(IntPtr guard);
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern void bft_guard_free(IntPtr guard);
+
+        [DllImport("g29testhost.dll")]
+        private static extern int bft_guard_lower(IntPtr guard, int ceilingPercent);
+
+        [DllImport("g29testhost.dll")]
+        private static extern void bft_guard_trip(IntPtr guard);
+
+        [DllImport("g29testhost.dll")]
+        private static extern void bft_guard_fake_clock(IntPtr guard, long now);
+
+        [DllImport("g29testhost.dll")]
+        private static extern long bft_guard_held(IntPtr guard, long now);
+
+        [DllImport("g29testhost.dll")]
+        private static extern int bft_lease_evaluate(IntPtr guard, IntPtr session, int maxHoldMs, int stallMs, long now);
     }
 
     internal sealed class NativeSharedMemory : IDisposable
@@ -114,25 +162,25 @@ namespace G29.Tests
             }
         }
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern IntPtr bft_shm_table();
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern void bft_shm_free(IntPtr table);
 
-        [DllImport("g29testvm.dll", CharSet = CharSet.Unicode)]
+        [DllImport("g29testhost.dll", CharSet = CharSet.Unicode)]
         private static extern int bft_shm_create(IntPtr table, string name, int size, int everyone, out uint handle);
 
-        [DllImport("g29testvm.dll", CharSet = CharSet.Unicode)]
+        [DllImport("g29testhost.dll", CharSet = CharSet.Unicode)]
         private static extern int bft_shm_open(IntPtr table, string name, int size, out uint handle);
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern int bft_shm_read(IntPtr table, uint handle, int offset, byte[] data, int length);
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern int bft_shm_write(IntPtr table, uint handle, int offset, byte[] data, int length);
 
-        [DllImport("g29testvm.dll")]
+        [DllImport("g29testhost.dll")]
         private static extern void bft_shm_close(IntPtr table, uint handle);
     }
 }

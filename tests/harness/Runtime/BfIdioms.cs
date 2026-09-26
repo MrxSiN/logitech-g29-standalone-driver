@@ -10,7 +10,7 @@ namespace G29.Bridge.Runtime
     // exactly those commands on consistently placed cells. Every idiom has a
     // closed-form Execute that must leave the tape exactly as plain execution of
     // the whole loop would; when its preconditions do not hold it returns false and
-    // the VM runs the loop plainly. RuntimeTests checks each idiom against plain
+    // the interpreter runs the loop plainly. RuntimeTests checks each idiom against plain
     // execution on generated inputs.
     internal static class BfIdioms
     {

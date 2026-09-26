@@ -79,7 +79,7 @@ namespace G29.Tests
         // program waits with nothing left to deliver).
         internal void RunCli(string[] arguments)
         {
-            harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+            harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
             harness.OnCommand = Handle;
             harness.Post(BfMainTests.Boot(1, arguments));
             harness.Run();

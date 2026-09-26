@@ -26,6 +26,12 @@ int frame_parser_push(frame_parser *parser, uint8_t b, char *error, size_t error
 
         parser->frame.type = parser->header[2];
         parser->frame.flags = parser->header[3];
+        if (parser->frame.flags != 0) {
+            /* reserved: no command defines a flag, so a set bit is not understood */
+            snprintf(error, error_length, "Output frame sets reserved flags %02X.", parser->frame.flags);
+            return -1;
+        }
+
         parser->frame.sequence = (uint16_t)(parser->header[4] | (parser->header[5] << 8));
         parser->frame.length = (uint16_t)(parser->header[6] | (parser->header[7] << 8));
         if (parser->frame.length > FRAME_MAX_PAYLOAD) {

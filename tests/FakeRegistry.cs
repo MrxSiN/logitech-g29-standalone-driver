@@ -10,6 +10,9 @@ namespace G29.Tests
     // 32-bit views (WOW64 redirection), everything else is shared between views.
     internal sealed class FakeRegistry
     {
+        // Every key path any scenario asked to create, change or delete.
+        internal static readonly HashSet<string> MutatedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         private readonly SortedDictionary<string, Dictionary<string, Value>> keys = new SortedDictionary<string, Dictionary<string, Value>>(StringComparer.OrdinalIgnoreCase);
 
         internal sealed class Value
@@ -128,6 +131,12 @@ namespace G29.Tests
             string path = reader.Text();
             string key = Key(root, view, path);
             var result = new PayloadWriter();
+            if (type != 0xB0 && type != 0xB4)
+            {
+                // SafetyTests checks these against the native bridge's allowlist.
+                MutatedPaths.Add(path);
+            }
+
             switch (type)
             {
                 case 0xB0:

@@ -1,12 +1,14 @@
 /*
  * g29ffb64.dll / g29ffb32.dll: the DirectInput force-feedback effect driver as a
- * native in-process COM server. A mechanical shell (port of G29EffectDriver.cs
- * and DirectInputBridge.cs): every IDirectInputEffectDriver call is serialized
+ * native in-process COM server. A mechanical shell: every IDirectInputEffectDriver call is serialized
  * to the Brainfuck program (role DIRECTINPUT), which decides the result; the
  * values it returns are copied into the caller's buffers within their declared
  * sizes. The bridge performs the program's generic HID, timer and shared-memory
  * commands. The emergency output guard is the only independent logic.
  */
+/* Every COM method runs inside a game process: no exception may escape it, so
+   the __except filters deliberately handle everything (analysis warning C6320). */
+#pragma warning(disable: 6320)
 #define CINTERFACE
 #define COBJMACROS
 #define DIRECTINPUT_VERSION 0x0800
@@ -17,16 +19,17 @@
 #include <dinput.h>
 #include <dinputd.h>
 #include <timeapi.h>
+#include <powrprof.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../common/bfvm.h"
+#include "../common/bfrt.h"
 #include "../common/frames.h"
 #include "../common/guard.h"
 #include "../common/hid.h"
-#include "../common/program.h"
+#include "../common/lease.h"
 #include "../common/session.h"
 #include "../common/system.h"
 
@@ -38,6 +41,11 @@
 #define FAILED_HRESULT ((HRESULT)0x80004005L)
 #define MAX_OUTPUTS 8
 #define MAX_BRIDGES 16
+/* A game holds a force as long as it likes (DirectInput's INFINITE duration is
+   legitimate), so the lease has no hold limit here; it ends the force when the
+   program leaves input unread this long. */
+#define GAME_FORCE_HOLD_LIMIT_MS 0
+#define FORCE_STALL_LIMIT_MS 1000
 
 /* DIEP bits that say which DIEFFECT pointers DirectInput filled in. */
 #define VALID_DIRECTION 0x040
@@ -48,7 +56,6 @@
 /* {D252A2D4-A917-47D3-BD1B-F5A0138CFE12}: the class the program registers. */
 static const CLSID class_id = { 0xD252A2D4, 0xA917, 0x47D3, { 0xBD, 0x1B, 0xF5, 0xA0, 0x13, 0x8C, 0xFE, 0x12 } };
 
-static HMODULE module_handle;
 static volatile LONG object_count;
 static volatile LONG traced_calls;
 
@@ -65,6 +72,50 @@ static void trace(const char *format, ...)
     va_end(arguments);
     strncat(line, "\n", sizeof(line) - strlen(line) - 1);
     OutputDebugStringA(line);
+}
+
+/* Benchmark: every STATS_PERIOD_US the next call traces one summary line of the
+   DirectInput call latency and the HID write rate, then the counters restart. */
+#define STATS_PERIOD_US 5000000LL
+static SRWLOCK stats_lock = SRWLOCK_INIT;
+static struct {
+    int64_t started;
+    int64_t calls, call_total_us, call_max_us, failed;
+    int64_t writes, write_total_us, write_max_us;
+} stats;
+
+static void stats_add(int64_t *count, int64_t *total, int64_t *maximum, int64_t elapsed)
+{
+    AcquireSRWLockExclusive(&stats_lock);
+    (*count)++;
+    *total += elapsed;
+    if (elapsed > *maximum) {
+        *maximum = elapsed;
+    }
+
+    ReleaseSRWLockExclusive(&stats_lock);
+}
+
+static void stats_report(int64_t now)
+{
+    int64_t period;
+    AcquireSRWLockExclusive(&stats_lock);
+    if (!stats.started) {
+        stats.started = now;
+    }
+
+    period = now - stats.started;
+    if (period < STATS_PERIOD_US) {
+        ReleaseSRWLockExclusive(&stats_lock);
+        return;
+    }
+
+    trace("stats %lld ms: calls %lld (avg %lld us, max %lld us, failed %lld), hid writes %lld (%lld/s, avg %lld us, max %lld us)",
+        period / 1000, stats.calls, stats.calls ? stats.call_total_us / stats.calls : 0, stats.call_max_us, stats.failed,
+        stats.writes, stats.writes * 1000000 / period, stats.writes ? stats.write_total_us / stats.writes : 0, stats.write_max_us);
+    memset(&stats, 0, sizeof(stats));
+    stats.started = now;
+    ReleaseSRWLockExclusive(&stats_lock);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -88,6 +139,7 @@ typedef struct {
     HANDLE exited;
     HANDLE timer_wake;
     HANDLE timer_thread;
+    force_lease *lease;
     int timer_id;
     uint32_t timer_interval;
     int timer_repeat;
@@ -192,11 +244,14 @@ static int on_command(void *context, const g29_frame *frame, char *error, size_t
         const uint8_t *payload = pr_bytes(&r, length);
         const char *refused;
         int result;
+        int64_t started;
         hid_interface target;
         if (!pr_end(&r)) VIOLATION("Malformed write.");
         refused = guard_check(bridge->guard, payload, length);
         if (refused) VIOLATION("%s", refused);
+        started = clock_microseconds();
         result = hid_write(bridge->hid, token, payload, length);
+        stats_add(&stats.writes, &stats.write_total_us, &stats.write_max_us, clock_microseconds() - started);
         if (result == 0 && hid_find(bridge->hid, token, &target)) {
             guard_written(bridge->guard, target.path, target.output_length, payload, length);
         }
@@ -338,7 +393,51 @@ static void on_failure(void *context, const char *message)
     WakeAllConditionVariable(&bridge->changed);
     LeaveCriticalSection(&bridge->lock);
     SetEvent(bridge->timer_wake);
-    guard_emergency_stop(bridge->guard);
+    guard_trip(bridge->guard);
+}
+
+static void on_lease_expired(void *context, const char *reason)
+{
+    session_abort(((di_bridge *)context)->session, reason);
+}
+
+/* The machine is going to sleep: no wheel keeps a force through it. The game's
+   next change of force applies again after resume. */
+static ULONG CALLBACK on_power(PVOID context, ULONG type, PVOID setting)
+{
+    int index;
+    (void)context;
+    (void)setting;
+    if (type == PBT_APMSUSPEND) {
+        EnterCriticalSection(&bridges_lock);
+        for (index = 0; index < MAX_BRIDGES; index++) {
+            if (bridges[index]) {
+                guard_emergency_stop(bridges[index]->guard);
+            }
+        }
+
+        LeaveCriticalSection(&bridges_lock);
+    }
+
+    return 0;
+}
+
+static void watch_power(void)
+{
+    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+    static DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS parameters;
+    static HPOWERNOTIFY registration;
+    BOOL pending;
+    if (InitOnceBeginInitialize(&once, 0, &pending, NULL) && pending) {
+        parameters.Callback = on_power;
+        parameters.Context = NULL;
+        /* best effort: without it the service watchdog and the lease remain */
+        if (PowerRegisterSuspendResumeNotification(DEVICE_NOTIFY_CALLBACK, &parameters, &registration) != ERROR_SUCCESS) {
+            trace("suspend notifications are unavailable");
+        }
+
+        InitOnceComplete(&once, 0, NULL);
+    }
 }
 
 /* One timer, as the program uses it: a sleep loop so short intervals keep their
@@ -393,17 +492,10 @@ static unsigned __stdcall timer_loop(void *argument)
 
 static di_bridge *bridge_create(void)
 {
-    char error[256];
-    const bf_program *program = program_shared(module_handle, error, sizeof(error));
     di_bridge *bridge;
     payload_writer boot;
     int index;
-    if (!program) {
-        trace("the program could not be loaded: %s", error);
-        return NULL;
-    }
-
-    bridge = (di_bridge *)calloc(1, sizeof(di_bridge));
+    bridge =(di_bridge *)calloc(1, sizeof(di_bridge));
     if (!bridge) {
         return NULL;
     }
@@ -417,10 +509,33 @@ static di_bridge *bridge_create(void)
     bridge->shm = shm_create_table();
     bridge->exited = CreateEventW(NULL, TRUE, FALSE, NULL);
     bridge->timer_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
-    bridge->session = session_create(program, on_command, on_failure, bridge, BF_DEFAULT_STEP_BUDGET);
+    bridge->session = session_create(g29_program_run, on_command, on_failure, bridge, BF_DEFAULT_ITERATION_BUDGET);
     if (!bridge->hid || !bridge->guard || !bridge->shm || !bridge->exited || !bridge->timer_wake || !bridge->session) {
         /* a partly built bridge is left for the process to reclaim */
         trace("the bridge could not be created");
+        return NULL;
+    }
+
+    /* registered before it can apply force, so process exit and suspend reach
+       its guard; no free slot means no bridge */
+    EnterCriticalSection(&bridges_lock);
+    for (index = 0; index < MAX_BRIDGES; index++) {
+        if (!bridges[index]) {
+            bridges[index] = bridge;
+            break;
+        }
+    }
+
+    LeaveCriticalSection(&bridges_lock);
+    if (index == MAX_BRIDGES) {
+        trace("too many bridges in this process");
+        return NULL;
+    }
+
+    watch_power();
+    bridge->lease = lease_start(bridge->guard, bridge->session, GAME_FORCE_HOLD_LIMIT_MS, FORCE_STALL_LIMIT_MS, on_lease_expired, bridge);
+    if (!bridge->lease) {
+        trace("the force lease could not be started");
         return NULL;
     }
 
@@ -439,15 +554,6 @@ static di_bridge *bridge_create(void)
     trace("program started");
 
     bridge->timer_thread = (HANDLE)_beginthreadex(NULL, 0, timer_loop, bridge, 0, NULL);
-    EnterCriticalSection(&bridges_lock);
-    for (index = 0; index < MAX_BRIDGES; index++) {
-        if (!bridges[index]) {
-            bridges[index] = bridge;
-            break;
-        }
-    }
-
-    LeaveCriticalSection(&bridges_lock);
     return bridge;
 }
 
@@ -505,7 +611,7 @@ static HRESULT bridge_call(di_bridge *bridge, uint8_t type, const payload_writer
     LeaveCriticalSection(&bridge->lock);
     if (!answered) {
         if (!bridge->failed) {
-            on_failure(bridge, "The Brainfuck program did not answer a DirectInput call.");
+            session_abort(bridge->session, "The Brainfuck program did not answer a DirectInput call.");
         }
 
         LeaveCriticalSection(&bridge->call_lock);
@@ -565,12 +671,23 @@ static HRESULT driver_call(effect_driver *driver, uint8_t type, const payload_wr
     di_output outputs[MAX_OUTPUTS];
     int count = 0, index;
     HRESULT result;
+    int64_t started, finished;
     di_bridge *bridge = driver_bridge(driver);
     if (!bridge) {
         return FAILED_HRESULT;
     }
 
+    started = clock_microseconds();
     result = bridge_call(bridge, type, arguments, outputs, &count);
+    finished = clock_microseconds();
+    stats_add(&stats.calls, &stats.call_total_us, &stats.call_max_us, finished - started);
+    if (FAILED(result)) {
+        AcquireSRWLockExclusive(&stats_lock);
+        stats.failed++;
+        ReleaseSRWLockExclusive(&stats_lock);
+    }
+
+    stats_report(finished);
     if (InterlockedIncrement(&traced_calls) <= 200 || FAILED(result)) {
         trace("call %02X -> 0x%08lX", type, (unsigned long)result);
     }
@@ -733,7 +850,7 @@ static HRESULT STDMETHODCALLTYPE driver_get_state(IDirectInputEffectDriver *self
     }
 }
 
-/* The DIEFFECT part of EV_DI_DOWNLOAD_EFFECT (src/brainfuck/dieffect.bfa).
+/* The DIEFFECT part of EV_DI_DOWNLOAD_EFFECT (src/brainfuck/ABI.md).
    Fields beyond dwSize are never read; pointer members are followed only when
    DirectInput marked them valid. */
 static void serialize_effect(const DIEFFECT *effect, DWORD changed, payload_writer *w)
@@ -952,7 +1069,7 @@ static IClassFactoryVtbl factory_vtable = {
 
 static IClassFactory factory = { &factory_vtable };
 
-HRESULT __stdcall DllGetClassObject(REFCLSID clsid, REFIID riid, void **object)
+_Check_return_ HRESULT __stdcall DllGetClassObject(_In_ REFCLSID clsid, _In_ REFIID riid, _Outptr_ void **object)
 {
     if (!object) {
         return E_POINTER;
@@ -970,7 +1087,7 @@ HRESULT __stdcall DllGetClassObject(REFCLSID clsid, REFIID riid, void **object)
 }
 
 /* The program's session and threads live until the process ends. */
-HRESULT __stdcall DllCanUnloadNow(void)
+__control_entrypoint(DllExport) HRESULT __stdcall DllCanUnloadNow(void)
 {
     return S_FALSE;
 }
@@ -980,7 +1097,6 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
     int index;
     switch (reason) {
     case DLL_PROCESS_ATTACH:
-        module_handle = instance;
         trace("loaded (%d-bit)", (int)(sizeof(void *) * 8));
         InitializeCriticalSection(&bridges_lock);
         DisableThreadLibraryCalls(instance);

@@ -155,7 +155,7 @@ namespace G29.Tests
                 Compare(expected, HidEvents(bridge), name);
                 if (result.StartsWith("error ", StringComparison.Ordinal))
                 {
-                    Assert.True(bridge.Stderr == "[THE VOID OBJECTS] " + result.Substring(6).Replace("\\r\\n", "\r\n") + "\r\n", name + ": error message, got " + bridge.Stderr);
+                    Assert.True(bridge.Stderr == "Error: " + result.Substring(6).Replace("\\r\\n", "\r\n") + "\r\n", name + ": error message, got " + bridge.Stderr);
                     Assert.True(bridge.ExitCode == 1, name + ": exit 1");
                 }
                 else
@@ -194,7 +194,7 @@ namespace G29.Tests
                 "timer 1 5000", "timer-cancel 1",
                 "open n1", "send n1 13000000000000", "close n1"
             }, AllEvents(wheel), "Ctrl+C during the force test sends the stop report");
-            Assert.True(wheel.ExitCode == 0 && wheel.Stdout.StartsWith("FORCE RITUAL COMPLETE", StringComparison.Ordinal), "cancelled force test still completes");
+            Assert.True(wheel.ExitCode == 0 && wheel.Stdout.StartsWith("Force test complete", StringComparison.Ordinal), "cancelled force test still completes");
 
             // Ctrl+C outside the force test ends the command like the legacy tool.
             var init = new FakeBridge(new FakeBridge.Phase(FakeBridge.Compatibility("c1")));

@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Runtime.InteropServices;
 using G29.Bridge.Runtime;
 
 namespace G29.Tests
@@ -10,12 +8,6 @@ namespace G29.Tests
     {
         internal static void Run()
         {
-            string committed = File.ReadAllText(Path.Combine(BfMainTests.RepositoryRoot, @"src\brainfuck\g29-main.bf"));
-            foreach (string binary in new[] { "g29ctl.exe", "g29ffb64.dll", "g29ffb32.dll" })
-            {
-                Assert.True(ReadEmbeddedProgram(binary) == committed, binary + " embeds the committed g29-main.bf");
-            }
-
             var protocol = new ProgramProtocol();
             Assert.True(protocol.IsG29Hardware(0xC24F, 0), "native G29 identification");
             Assert.True(protocol.IsG29Hardware(0xC294, 0x1350), "compatibility-mode revision identification");
@@ -53,7 +45,7 @@ namespace G29.Tests
         // independently of the C# adapter's checks.
         private static void ProgramBounds()
         {
-            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultStepBudget);
+            var harness = new BfHarness(BfMainTests.Program, BfVm.DefaultIterationBudget);
             harness.Post(BfMainTests.Boot(4));
             harness.Run();
             ushort sequence = 100;
@@ -77,49 +69,5 @@ namespace G29.Tests
             harness.Post(new Frame(0x05, 0, 9, new byte[] { (byte)'R', 40 }));
             BfMainTests.Expect(harness.Run()[0], 0x8F, 9, new byte[] { 1 }, "a short request is refused");
         }
-
-        // The G29_PROGRAM resource of a shipping binary (either bitness).
-        private static string ReadEmbeddedProgram(string binary)
-        {
-            string path = Path.Combine(Path.GetDirectoryName(typeof(ProtocolTests).Assembly.Location), binary);
-            IntPtr module = LoadLibraryEx(path, IntPtr.Zero, LoadLibraryAsImageResource | LoadLibraryAsDataFile);
-            Assert.True(module != IntPtr.Zero, "load " + binary + " as data");
-            try
-            {
-                IntPtr resource = FindResource(module, "G29_PROGRAM", new IntPtr(10));
-                Assert.True(resource != IntPtr.Zero, binary + " carries the program");
-                int size = SizeofResource(module, resource);
-                IntPtr data = LockResource(LoadResource(module, resource));
-                var bytes = new byte[size];
-                Marshal.Copy(data, bytes, 0, size);
-                return System.Text.Encoding.ASCII.GetString(bytes);
-            }
-            finally
-            {
-                FreeLibrary(module);
-            }
-        }
-
-        private const uint LoadLibraryAsDataFile = 0x00000002;
-        private const uint LoadLibraryAsImageResource = 0x00000020;
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern IntPtr FindResource(IntPtr module, string name, IntPtr type);
-
-        [DllImport("kernel32.dll")]
-        private static extern int SizeofResource(IntPtr module, IntPtr resource);
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr LoadResource(IntPtr module, IntPtr resource);
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr LockResource(IntPtr data);
-
-        [DllImport("kernel32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool FreeLibrary(IntPtr module);
     }
 }
