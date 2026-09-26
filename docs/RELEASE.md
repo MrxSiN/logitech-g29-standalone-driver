@@ -1,7 +1,23 @@
 # Release process
 
-G29 Standalone is pre-release. No version may be called 1.0, production-ready
-or enterprise-ready until every gate below has recorded evidence.
+The current release is **v1.0.0** (2026-09-26), the first release. It was
+released with some of the gates below still open; the table records where
+each one stands. No release may be called production-ready or
+enterprise-ready until every gate has recorded evidence.
+
+## Releasing a version
+
+1. Update `CHANGELOG.md`: a `## vX.Y.Z` section with a one-line summary of
+   what was tested, then "What's in it", "Fixed" (when there is something) and
+   "Notes".
+2. Run `.\test.ps1 -Device` with the wheel connected and `.\test.ps1 -Sanitize
+   -Analyze`.
+3. Commit, tag `vX.Y.Z`, push the branch and the tag.
+4. Create the GitHub release from the changelog section and attach
+   `G29Standalone-vX.Y.Z.zip`: `Install-Driver.ps1`, `Uninstall-Driver.ps1`,
+   `Trace-Driver.ps1`, `tools\InstallCommon.ps1`, the three binaries in
+   `artifacts\bin`, `README.md`, `CHANGELOG.md`, `LICENSE` and
+   `THIRD_PARTY_NOTICES.md`, in the same layout as the repository.
 
 ## What the repository automates
 
@@ -38,17 +54,19 @@ provenance attestation, an SBOM (the only dependencies are the Windows SDK,
 the MSVC runtime linked statically and the .NET Framework compiler used at
 build time), CodeQL, protected release environment and branch protection.
 
-## Release gates (all required for 1.0)
+## Release gates
 
-| Gate | Evidence |
-|---|---|
-| automated suite green at the tag, including `-Sanitize -Analyze` | CI run |
-| architecture tests (raw Brainfuck only, no interpreter shipped), reproducible binaries | CI run |
-| every HIL test in `docs/TESTING.md` passed and recorded | signed-off log per test |
-| force safety: HIL-6..HIL-12 pass their counts (100 client kills, 100 unplugs, 50 suspends) | log |
-| install, upgrade, uninstall, reinstall on clean Windows 10 and 11 (HIL-15), including SYSTEM-context deployment | log |
-| real-game matrix: several unrelated titles, both bitnesses, observed | `docs/TESTING.md` table |
-| 24 h soak (HIL-16) | log |
-| signed and timestamped binaries, published hashes | manifest |
-| threat model reviewed against the shipped build | `docs/THREAT_MODEL.md` |
-| third-party provenance reviewed | `THIRD_PARTY_NOTICES.md`, `docs/PROTOCOL.md` |
+Required before a release is called production-ready.
+
+| Gate | Evidence | At v1.0.0 |
+|---|---|---|
+| automated suite green at the tag, including `-Sanitize -Analyze` | CI run | passed: CI run 36217647647 on the tagged commit, and `test.ps1 -Device` locally |
+| architecture tests (raw Brainfuck only, no interpreter shipped), reproducible binaries | CI run | passed: same CI run |
+| every HIL test in `docs/TESTING.md` passed and recorded | signed-off log per test | open: HIL-1 (PS3 mode), LEDs and a ±20 force observed on 2026-09-26 (`test.ps1 -Device`), not signed off |
+| force safety: HIL-6..HIL-12 pass their counts (100 client kills, 100 unplugs, 50 suspends) | log | open |
+| install, upgrade, uninstall, reinstall on clean Windows 10 and 11 (HIL-15), including SYSTEM-context deployment | log | partly: `docs/HARDWARE_VALIDATION.md` |
+| real-game matrix: several unrelated titles, both bitnesses, observed | `docs/TESTING.md` table | open: Assetto Corsa (64-bit) only |
+| 24 h soak (HIL-16) | log | open |
+| signed and timestamped binaries, published hashes | manifest | open: not signed |
+| threat model reviewed against the shipped build | `docs/THREAT_MODEL.md` | open |
+| third-party provenance reviewed | `THIRD_PARTY_NOTICES.md`, `docs/PROTOCOL.md` | open |
