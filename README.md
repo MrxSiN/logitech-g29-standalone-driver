@@ -17,7 +17,7 @@ Steering range, autocenter, LEDs and force feedback in games — without Logitec
 </div>
 
 ```text                                                                                                                                          
-                                    @@@@@@                                                                
+                                    @@@@@@                                                      
                                   @@@@@@@@@                                                     
                                 @@@@@@@@@@@@@                                                   
                                @@@@@@@@@@@@@@@                                                  
