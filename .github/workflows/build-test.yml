@@ -27,7 +27,7 @@ jobs:
       # and the install transaction with failure injection.
       - name: Build and test
         shell: powershell
-        run: .\test.ps1 -Sanitize -Analyze
+        run: .\scripts\test.ps1 -Sanitize -Analyze
 
       # Compiled program on recorded scenario workloads (docs/PERFORMANCE.md).
       - name: Benchmark
@@ -39,7 +39,7 @@ jobs:
         shell: powershell
         run: |
           $first = Get-FileHash artifacts\bin\g29ctl.exe, artifacts\bin\g29ffb64.dll, artifacts\bin\g29ffb32.dll | ForEach-Object Hash
-          .\build.ps1 -Clean
+          .\scripts\build.ps1 -Clean
           $second = Get-FileHash artifacts\bin\g29ctl.exe, artifacts\bin\g29ffb64.dll, artifacts\bin\g29ffb32.dll | ForEach-Object Hash
           if (Compare-Object $first $second) { throw 'The build is not reproducible.' }
 

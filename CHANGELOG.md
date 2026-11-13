@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v1.1.0
+
+Fixes the idle CPU use reported in #1 and moves the scripts out of the
+repository root. Automated suite only; not run on a physical wheel.
 
 ### Fixed
 
@@ -19,6 +22,13 @@
 
 - README: where the G29's DirectInput registration lives in the registry, for
   removing a leftover G HUB registration.
+
+### Changed
+
+- **Scripts moved to `scripts\`.** Run `.\scripts\Install-Driver.ps1`,
+  `.\scripts\Uninstall-Driver.ps1`, `.\scripts\Trace-Driver.ps1`,
+  `.\scripts\build.ps1` and `.\scripts\test.ps1`; `native.ps1` moved to
+  `tools\`. The repository root holds no scripts any more.
 
 ## v1.0.0
 

@@ -3,9 +3,9 @@
 ## Automated (no wheel, no administrator, no network)
 
 ```powershell
-.\test.ps1                    # build, native test pieces, C# suite, install checks
-.\test.ps1 -Sanitize -Analyze # also the whole suite under AddressSanitizer, and /analyze
-.\test.ps1 -Reproducible      # also a clean rebuild that must be byte-identical
+.\scripts\test.ps1                    # build, native test pieces, C# suite, install checks
+.\scripts\test.ps1 -Sanitize -Analyze # also the whole suite under AddressSanitizer, and /analyze
+.\scripts\test.ps1 -Reproducible      # also a clean rebuild that must be byte-identical
 ```
 
 | Layer | Where | What it proves |

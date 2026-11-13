@@ -1,8 +1,9 @@
 # Release process
 
-The current release is **v1.0.0** (2026-09-26), the first release. It was
-released with some of the gates below still open; the table records where
-each one stands. No release may be called production-ready or
+The current release is **v1.1.0** (2026-11-14). v1.0.0 (2026-09-26), the
+first release, was released with some of the gates below still open; the
+table records where each one stood then, and v1.1.0 closed none of them (its
+force-timer change was not run on a physical wheel). No release may be called production-ready or
 enterprise-ready until every gate has recorded evidence.
 
 ## Releasing a version
@@ -10,12 +11,13 @@ enterprise-ready until every gate has recorded evidence.
 1. Update `CHANGELOG.md`: a `## vX.Y.Z` section with a one-line summary of
    what was tested, then "What's in it", "Fixed" (when there is something) and
    "Notes".
-2. Run `.\test.ps1 -Device` with the wheel connected and `.\test.ps1 -Sanitize
+2. Run `.\scripts\test.ps1 -Device` with the wheel connected and `.\scripts\test.ps1 -Sanitize
    -Analyze`.
 3. Commit, tag `vX.Y.Z`, push the branch and the tag.
 4. Create the GitHub release from the changelog section and attach
-   `G29Standalone-vX.Y.Z.zip`: `Install-Driver.ps1`, `Uninstall-Driver.ps1`,
-   `Trace-Driver.ps1`, `tools\InstallCommon.ps1`, the three binaries in
+   `G29Standalone-vX.Y.Z.zip`: `scripts\Install-Driver.ps1`,
+   `scripts\Uninstall-Driver.ps1`, `scripts\Trace-Driver.ps1`,
+   `tools\InstallCommon.ps1`, the three binaries in
    `artifacts\bin`, `README.md`, `CHANGELOG.md`, `LICENSE` and
    `THIRD_PARTY_NOTICES.md`, in the same layout as the repository.
 
@@ -38,7 +40,7 @@ enterprise-ready until every gate has recorded evidence.
 Signing. The binaries are **not signed** today. When a code-signing
 certificate exists:
 
-1. Build from a clean checkout of the tagged commit; run `.\test.ps1 -Sanitize
+1. Build from a clean checkout of the tagged commit; run `.\scripts\test.ps1 -Sanitize
    -Analyze`; keep the unsigned `SHA256SUMS`.
 2. Sign on a protected machine or a protected CI environment that pull-request
    jobs cannot reach:

@@ -67,7 +67,7 @@ They are not rules the compiler enforces.
   `tests/reference/*.txt` and the test literals in the same change, and say
   why in `CHANGELOG.md`. Never change HID report bytes without evidence
   (`docs/PROTOCOL.md`).
-- After any edit: `.\test.ps1`. It checks the source alphabet, compiles the
+- After any edit: `.\scripts\test.ps1`. It checks the source alphabet, compiles the
   program ahead of time, runs every scenario on the reference interpreter and
   on the compiled program, and fails on any difference.
 - The compiler must still prove no fault in the program (`static_faults=0`

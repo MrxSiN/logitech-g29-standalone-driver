@@ -94,7 +94,7 @@ time.
 
 ## Status
 
-**v1.0.0 — first release.** The automated suite passes, and the wheel has been tested with the
+**v1.1.0.** The automated suite passes, and the wheel has been tested with the
 device test and in Assetto Corsa. Longer hardware tests (soak, unplug and suspend under force)
 and more games are still open; `docs/TESTING.md` tracks them and `docs/RELEASE.md` shows where
 each release gate stands.
@@ -126,7 +126,7 @@ adding a row.
 
 ## Install
 
-1. Download `G29Standalone-v1.0.0.zip` from [Releases](https://github.com/MrxSiN/logitech-g29-standalone-driver/releases) and extract it.
+1. Download `G29Standalone-v1.1.0.zip` from [Releases](https://github.com/MrxSiN/logitech-g29-standalone-driver/releases) and extract it.
 2. Open PowerShell in the extracted folder and allow scripts for this window:
 
    ```powershell
@@ -137,8 +137,8 @@ adding a row.
 3. Install:
 
    ```powershell
-   .\Install-Driver.ps1                          # defaults: 900 degrees, no autocenter
-   .\Install-Driver.ps1 -Range 900 -AutoCenter 0  # or choose
+   .\scripts\Install-Driver.ps1                           # defaults: 900 degrees, no autocenter
+   .\scripts\Install-Driver.ps1 -Range 900 -AutoCenter 0  # or choose
    ```
 
 The installer asks for administrator rights for the installation step; from an elevated
@@ -166,7 +166,7 @@ plugged in and stops 15 seconds after it is removed.
   refuses to stomp over it. Install the service without force feedback instead:
 
   ```powershell
-  .\Install-Driver.ps1 -SkipForceFeedback
+  .\scripts\Install-Driver.ps1 -SkipForceFeedback
   ```
 
   The registration lives in two places. To hand the wheel to this driver after uninstalling
@@ -183,7 +183,7 @@ plugged in and stops 15 seconds after it is removed.
 ### Uninstall
 
 ```powershell
-.\Uninstall-Driver.ps1
+.\scripts\Uninstall-Driver.ps1
 ```
 
 This removes the service, the installed files and the per-user DirectInput registration from
@@ -215,8 +215,8 @@ The `--i-understand` part is not decorative.
 <br>
 
 ```powershell
-.\test.ps1 -Device
-.\test.ps1 -Device -DeviceForce 25   # if 20 does not move your wheel
+.\scripts\test.ps1 -Device
+.\scripts\test.ps1 -Device -DeviceForce 25   # if 20 does not move your wheel
 ```
 
 After the automated suite it checks the connected wheel, one line per step: identification,
@@ -238,7 +238,7 @@ part is expected.
 Start this from a **non-elevated** PowerShell before the game, and press `Ctrl+C` after:
 
 ```powershell
-.\Trace-Driver.ps1
+.\scripts\Trace-Driver.ps1
 ```
 
 The log goes to `artifacts\logs`: the calls the game makes, any failures, and every five seconds
@@ -335,13 +335,16 @@ when the program stops behaving.
 ## Development
 
 ```powershell
-.\build.ps1                     # binaries in artifacts\bin
-.\test.ps1                      # build + full test suite
-.\test.ps1 -Device              # also the connected wheel
-.\test.ps1 -Sanitize -Analyze   # also AddressSanitizer and /analyze
-.\test.ps1 -Reproducible        # clean rebuild must be byte-identical
+.\scripts\build.ps1                     # binaries in artifacts\bin
+.\scripts\test.ps1                      # build + full test suite
+.\scripts\test.ps1 -Device              # also the connected wheel
+.\scripts\test.ps1 -Sanitize -Analyze   # also AddressSanitizer and /analyze
+.\scripts\test.ps1 -Reproducible        # clean rebuild must be byte-identical
 artifacts\bin\G29.Tests.exe --benchmark
 ```
+
+Everything you run is in `scripts\` (install, uninstall, trace, build, test); `tools\` holds what
+those scripts use (the Brainfuck compiler, the native build, the install transaction).
 
 The normal suite needs **no wheel, no G HUB, no administrator rights and no network access**. It
 covers the protocol, CLI, service, reconnect monitor, DirectInput, force feedback, watchdog,
@@ -363,7 +366,7 @@ until the steering wheel develops an opinion.
 
 Issues and pull requests are welcome. Changes that affect HID reports, device identification,
 force feedback or other hardware-facing behavior should include the technical basis for the change
-and matching tests. Run `.\test.ps1` before submitting.
+and matching tests. Run `.\scripts\test.ps1` before submitting.
 
 If you are editing the Brainfuck, my condolences. Please also read `AI_MAINTENANCE.md`.
 

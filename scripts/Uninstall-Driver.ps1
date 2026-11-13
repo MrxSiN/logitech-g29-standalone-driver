@@ -3,7 +3,8 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'tools\InstallCommon.ps1')
+$root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'tools\InstallCommon.ps1')
 trap { Write-Host $_ -ForegroundColor Red; Wait-ConsoleClose; break }
 
 # The service name and install directory are the fixed identity in

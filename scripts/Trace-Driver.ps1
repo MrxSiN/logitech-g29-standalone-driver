@@ -15,11 +15,12 @@ param(
 # debug-output listener works at a time; close DebugView first.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'tools\InstallCommon.ps1')
+$root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'tools\InstallCommon.ps1')
 trap { Write-Host $_ -ForegroundColor Red; Wait-ConsoleClose; break }
 
 if (-not $LogPath) {
-    $LogPath = Join-Path $PSScriptRoot "artifacts\logs\g29-trace-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+    $LogPath = Join-Path $root "artifacts\logs\g29-trace-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 }
 
 $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath)
@@ -75,7 +76,7 @@ $started = Get-Date
 $writer = [IO.StreamWriter]::new($LogPath, $false, [Text.Encoding]::UTF8)
 $writer.AutoFlush = $true
 $writer.WriteLine("G29 trace started $($started.ToString('o'))")
-$status = & (Join-Path $PSScriptRoot 'artifacts\bin\g29ctl.exe') status 2>&1
+$status = & (Join-Path $root 'artifacts\bin\g29ctl.exe') status 2>&1
 $writer.WriteLine("device: $status")
 Write-Host "Recording to $LogPath. Start the game now; press Ctrl+C when done."
 

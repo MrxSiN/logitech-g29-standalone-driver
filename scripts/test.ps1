@@ -24,14 +24,15 @@ param(
 # Needs no wheel, G HUB, administrator rights or network access.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'tools\InstallCommon.ps1')
+$root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'tools\InstallCommon.ps1')
 # Run on its own (not from Install-Driver.ps1): keep a window opened for it.
 $topLevel = $MyInvocation.CommandOrigin -eq 'Runspace'
 trap { Write-Host $_ -ForegroundColor Red; if ($topLevel) { Wait-ConsoleClose }; break }
 
-$program = Join-Path $PSScriptRoot 'src\brainfuck\g29-main.bf'
+$program = Join-Path $root 'src\brainfuck\g29-main.bf'
 $programHash = (Get-FileHash -LiteralPath $program -Algorithm SHA256).Hash
-$bin = Join-Path $PSScriptRoot 'artifacts\bin'
+$bin = Join-Path $root 'artifacts\bin'
 $shipping = @('g29ctl.exe', 'g29ffb64.dll', 'g29ffb32.dll') | ForEach-Object { Join-Path $bin $_ }
 
 & (Join-Path $PSScriptRoot 'build.ps1')
@@ -39,15 +40,15 @@ $shipping = @('g29ctl.exe', 'g29ffb64.dll', 'g29ffb32.dll') | ForEach-Object { J
 # The C# tests include the compiler's source for its unit tests.
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $testOutput = Join-Path $bin 'G29.Tests.exe'
-$testSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'tests') -Recurse -Filter '*.cs' -File | ForEach-Object FullName)
-$testSources += Join-Path $PSScriptRoot 'tools\BfAot\Compiler.cs'
+$testSources = @(Get-ChildItem -LiteralPath (Join-Path $root 'tests') -Recurse -Filter '*.cs' -File | ForEach-Object FullName)
+$testSources += Join-Path $root 'tools\BfAot\Compiler.cs'
 & $compiler /nologo /target:exe /optimize+ /platform:x64 /warn:4 /warnaserror+ /reference:System.dll /reference:System.Core.dll "/out:$testOutput" $testSources
 if ($LASTEXITCODE -ne 0) {
     throw "Test compilation failed with exit code $LASTEXITCODE."
 }
 
 # The test program corpus, compiled ahead of time into g29testhost.dll.
-$testPrograms = Join-Path $PSScriptRoot 'artifacts\obj\testprograms'
+$testPrograms = Join-Path $root 'artifacts\obj\testprograms'
 & $testOutput --write-programs $testPrograms
 if ($LASTEXITCODE -ne 0) {
     throw "Writing the test programs failed with exit code $LASTEXITCODE."
@@ -60,7 +61,7 @@ if ($LASTEXITCODE -ne 0) {
 $nativeTargets = @('testhost', 'drivertest', 'hardening')
 if ($Sanitize) { $nativeTargets += 'asan' }
 if ($Analyze) { $nativeTargets += 'analyze' }
-& (Join-Path $PSScriptRoot 'native.ps1') -Target $nativeTargets -TestPrograms $testPrograms
+& (Join-Path $root 'tools\native.ps1') -Target $nativeTargets -TestPrograms $testPrograms
 
 & $testOutput
 if ($LASTEXITCODE -ne 0) {
@@ -69,7 +70,7 @@ if ($LASTEXITCODE -ne 0) {
 
 if ($Sanitize) {
     # the same executable next to the AddressSanitizer build of g29testhost.dll
-    $asan = Join-Path $PSScriptRoot 'artifacts\asan'
+    $asan = Join-Path $root 'artifacts\asan'
     Copy-Item -LiteralPath $testOutput -Destination $asan -Force
     foreach ($name in @('g29ctl.exe', 'g29drivertest.dll', 'g29ffb64.dll', 'g29ffb32.dll', 'drivercheck64.exe', 'drivercheck32.exe')) {
         Copy-Item -LiteralPath (Join-Path $bin $name) -Destination $asan -Force
@@ -81,7 +82,7 @@ if ($Sanitize) {
     }
 }
 
-& (Join-Path $PSScriptRoot 'tests\InstallCommon.Tests.ps1') -Executable (Join-Path $bin 'g29ctl.exe')
+& (Join-Path $root 'tests\InstallCommon.Tests.ps1') -Executable (Join-Path $bin 'g29ctl.exe')
 
 # The build reads the Brainfuck program and never writes it.
 if ((Get-FileHash -LiteralPath $program -Algorithm SHA256).Hash -ne $programHash) {
@@ -132,7 +133,7 @@ if ($Device) {
     # DirectInput, the way a game reaches the installed driver (no torque).
     $installedDriver = Join-Path (Get-G29InstallDirectory) 'g29ffb64.dll'
     if (Test-Path -LiteralPath $installedDriver) {
-        & (Join-Path $PSScriptRoot 'native.ps1') -Target diprobe
+        & (Join-Path $root 'tools\native.ps1') -Target diprobe
         $probe = @(& (Join-Path $bin 'diprobe.exe') 2>&1)
         foreach ($expected in @('forcefeedback=1', 'Acquire 0x00000000, driver loaded: 1', 'CreateEffect(constant, magnitude 0) 0x00000000', 'Stop 0x00000000')) {
             $passed = [bool]($probe | Where-Object { $_ -like "*$expected*" })

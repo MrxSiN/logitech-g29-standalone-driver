@@ -16,7 +16,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$projectRoot = $PSScriptRoot
+$projectRoot = Split-Path -Parent $PSScriptRoot
 $outputDirectory = Join-Path $projectRoot 'artifacts\bin'
 $objectDirectory = Join-Path $projectRoot 'artifacts\obj'
 $generatedDirectory = Join-Path $objectDirectory 'generated'

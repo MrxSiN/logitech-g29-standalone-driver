@@ -15,10 +15,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'tools\InstallCommon.ps1')
+$root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'tools\InstallCommon.ps1')
 trap { Write-Host $_ -ForegroundColor Red; Wait-ConsoleClose; break }
 
-$artifacts = Join-Path $PSScriptRoot 'artifacts\bin'
+$artifacts = Join-Path $root 'artifacts\bin'
 $options = @()
 if ($null -ne $Range) { $options += @('--range', "$Range") }
 if ($null -ne $AutoCenter) { $options += @('--autocenter', "$AutoCenter") }
@@ -68,7 +69,7 @@ $context = @{
     Options           = $options
     SkipForceFeedback = [bool]$SkipForceFeedback
     InstallDirectory  = Get-G29InstallDirectory
-    LicensePath       = Join-Path $PSScriptRoot 'LICENSE'
+    LicensePath       = Join-Path $root 'LICENSE'
 }
 
 try {

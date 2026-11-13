@@ -3,7 +3,7 @@
 ## Benchmark
 
 ```powershell
-.\test.ps1                                   # builds g29testhost.dll and G29.Tests.exe
+.\scripts\test.ps1                                   # builds g29testhost.dll and G29.Tests.exe
 artifacts\bin\G29.Tests.exe --benchmark
 ```
 
