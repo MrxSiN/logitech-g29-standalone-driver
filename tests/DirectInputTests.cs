@@ -27,6 +27,7 @@ namespace G29.Tests
             ConditionEffectUsesSteering();
             DeviceLost();
             Polling();
+            IdleWithoutEffects();
             Console.WriteLine("  DirectInput role: worst force tick {0} loop iterations", Fake.WorstTick);
         }
 
@@ -90,15 +91,17 @@ namespace G29.Tests
             Answer state = di.State();
             Assert.True(state.Result == Ok && state.Output[4] == 0x40 + 0x01 + 0x02 + 0x10 && state.Output[8] == 0, "empty, stopped, actuators on");
 
-            // the first tick sends the zero force once and beats
+            // the first tick sends the zero force once, beats, and with no effect
+            // stops the force timer
             di.Commands.Clear();
             di.Tick(1000000);
-            Assert.True(di.Types() == "93 CB", "first tick: stop report and heartbeat");
+            Assert.True(di.Types() == "93 CB A1", "first tick: stop report, heartbeat, idle");
             Assert.True(Hex(di.LastWrite) == "13 00 00 00 00 00 00", "zero force is the stop report");
             Assert.True(di.LastBeatActive == 0 && di.LastBeatTick == 1000, "inactive beat with the system tick");
+            Assert.True(!di.TimerArmed, "no effect: no force timer");
             di.Commands.Clear();
             di.Tick(1002000);
-            Assert.True(di.Types() == "CB", "unchanged force is not resent");
+            Assert.True(di.Types() == "CB A1", "a late tick: unchanged force is not resent");
 
             // the session ends: timer, stop report, inactive beat, handles
             di.Commands.Clear();
@@ -247,6 +250,7 @@ namespace G29.Tests
         {
             var di = new Fake { PollValue = null };
             di.DeviceId(1);
+            di.Download(1, 0, "105", "4:100", 1);
             di.Commands.Clear();
             di.Tick(5000000);
             Assert.True(di.AllTypes() == "96 93 CB", "no steering sample yet: poll");
@@ -263,6 +267,39 @@ namespace G29.Tests
             di.Commands.Clear();
             di.Tick(5351001);
             Assert.True(di.AllTypes() == "96 CB", "no sample for more than 250 ms: poll");
+        }
+
+        // A process that holds the wheel without effects (a background service
+        // enumerating DirectInput devices) must not run the 2 ms force loop.
+        private static void IdleWithoutEffects()
+        {
+            var di = new Fake();
+            di.DeviceId(1);
+            di.Tick(1000000);
+            Assert.True(!di.TimerArmed, "idle after the stop report");
+
+            di.Commands.Clear();
+            Answer created = di.Download(1, 0, "105", "4:100", 1);
+            Assert.True(created.Result == Ok && di.AllTypes() == "A0", "creating an effect restarts the force timer");
+            Assert.True(di.TimerArmed && di.TimerInterval == 2, "2 ms force timer again");
+            di.Commands.Clear();
+            di.Download(1, 1, "105", "4:200", 1);
+            Assert.True(di.AllTypes() == string.Empty, "an update while running does not re-arm");
+            di.Commands.Clear();
+            di.Tick(1002000);
+            Assert.True(di.Types() == "CB" && di.TimerArmed, "effects keep the timer");
+
+            Assert.True(di.Destroy(1).Result == Ok, "destroy the only effect");
+            di.Commands.Clear();
+            di.Tick(1004000);
+            Assert.True(di.Types() == "CB A1" && !di.TimerArmed, "no effect left: idle again");
+
+            // a new session starts with the timer armed and not idle
+            di.DeviceId(1);
+            Assert.True(di.TimerArmed, "a new session arms the timer");
+            di.Commands.Clear();
+            di.Download(1, 0, "105", "4:100", 1);
+            Assert.True(di.AllTypes() == string.Empty, "no second arm in a new session");
         }
 
         // legacy: percent = -round(force / 100) half away from zero

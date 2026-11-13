@@ -169,6 +169,15 @@ plugged in and stops 15 seconds after it is removed.
   .\Install-Driver.ps1 -SkipForceFeedback
   ```
 
+  The registration lives in two places. To hand the wheel to this driver after uninstalling
+  G HUB, check both and delete the `OEMForceFeedback` subkey only when its `CLSID` value is
+  not `{D252A2D4-A917-47D3-BD1B-F5A0138CFE12}` (this project's), then run the installer again:
+
+  ```text
+  HKLM\SYSTEM\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_046D&PID_C24F\OEMForceFeedback
+  HKCU\System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_046D&PID_C24F\OEMForceFeedback
+  ```
+
 </details>
 
 ### Uninstall
