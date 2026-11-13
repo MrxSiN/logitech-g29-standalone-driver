@@ -205,6 +205,11 @@ starts with `now_us u64`, then:
 - Timers in role DIRECTINPUT are paced by a sleep loop with a 1 ms system timer
   resolution while an interval below 15 ms is armed; a tick is skipped while the
   program still has unread input.
+- The program arms its 2 ms force timer when DeviceID opens a session and
+  cancels it on the first tick at which no effect exists (after that tick's
+  stop report and inactive heartbeat); a DownloadEffect that leaves an effect
+  arms it again. A process that holds the wheel without effects therefore
+  runs no force loop and keeps no 1 ms timer resolution.
 
 - Event-log text (`CMD_EVENTLOG_WRITE`) in a running service goes to the
   Application log under the service's name as the event source; the native

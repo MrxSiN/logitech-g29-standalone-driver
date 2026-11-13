@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **CPU use in processes that hold the wheel without force feedback**
+  ([#1](https://github.com/MrxSiN/logitech-g29-standalone-driver/issues/1)).
+  Any process that opens the G29 through DirectInput loads the force-feedback
+  driver, including Windows gaming and Xbox background services. The driver
+  ran its 2 ms force loop, and kept the system timer at 1 ms resolution, for
+  as long as the device stayed open, even with no effect downloaded. The
+  program now stops the force timer on the first tick at which no effect
+  exists (after the stop report and an inactive heartbeat) and starts it
+  again when a game downloads an effect. Games that use force feedback keep
+  the same 2 ms loop.
+
+### Documentation
+
+- README: where the G29's DirectInput registration lives in the registry, for
+  removing a leftover G HUB registration.
+
 ## v1.0.0
 
 First release. Tested on a Logitech G29 (native mode, PID C24F, revision 8900)
